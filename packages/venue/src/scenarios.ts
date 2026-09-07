@@ -163,7 +163,10 @@ export class ScenarioRunner {
   private timers: number[] = [];
   private readonly history: { name: ScenarioName; atMs: Ms }[] = [];
 
-  constructor(private readonly ctx: ScenarioContext) {}
+  private readonly ctx: ScenarioContext;
+  // Explicit field — see the note in txqueue.ts: strip-only mode rejects
+  // parameter properties.
+  constructor(ctx: ScenarioContext) { this.ctx = ctx; }
 
   get active(): RunningScenario | null { return this.running; }
   get log(): readonly { name: ScenarioName; atMs: Ms }[] { return this.history; }
@@ -284,11 +287,18 @@ export class ScenarioSpotDriver {
   private seq = 0;
   private rnd: () => number;
 
+  private readonly runner: ScenarioRunner;
+  private readonly ctx: ScenarioContext;
+
+  // Explicit fields — see the note in txqueue.ts: Node's strip-only TypeScript
+  // mode rejects parameter properties, and the agent runs straight off source.
   constructor(
-    private readonly runner: ScenarioRunner,
-    private readonly ctx: ScenarioContext,
+    runner: ScenarioRunner,
+    ctx: ScenarioContext,
     seed = 1,
   ) {
+    this.runner = runner;
+    this.ctx = ctx;
     this.price = ctx.baseSpot;
     let a = seed >>> 0;
     this.rnd = () => {

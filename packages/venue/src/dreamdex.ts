@@ -43,6 +43,7 @@ import {
   type Position, type Prob, type Quote, type Side, type Usd, type Venue, type VenueHealth,
 } from '@arena/shared';
 import type { NonceManager, TxQueue } from './txqueue.ts';
+import { tradableByTime, type BoundarySource } from './boundary.ts';
 
 /** A raw binary-market row as the indexer returns it (T-S2, observed live). */
 export interface SdkMarketRow {
@@ -126,6 +127,14 @@ export interface DreamDEXVenueOptions {
   lotRaw?: bigint;
   minSize?: number;
   feeBps?: number;
+  /** Resolves the opening price of a `reference` market (RFC-001 A4). Without
+   *  one, every reference market stays unpriceable (skip BOUNDARY_NOT_POSTED)
+   *  because the indexer row carries `strike: "0"` and never posts the boundary. */
+  boundary?: BoundarySource;
+  /** Drop markets with less than this long to live: writes are serialised and an
+   *  SDK write takes seconds, so an order on a market with moments left expires
+   *  before it can be submitted. 0 disables (prior behaviour). */
+  minSecondsToExpiry?: number;
   /** Measured caches (T-S4). */
   marketsCacheMs?: number;
   quoteCacheMs?: number;
@@ -194,6 +203,8 @@ export class DreamDEXVenue implements Venue {
   private readonly c: SdkClient;
   private readonly venueId: string;
   private readonly queue: TxQueue | undefined;
+  private readonly boundary: BoundarySource | undefined;
+  private readonly minTteMs: number;
   private readonly explorerBase: string;
   private readonly priceDecimals: number;
   private readonly tickRaw: bigint;
@@ -206,7 +217,15 @@ export class DreamDEXVenue implements Venue {
   private readonly nowFn: () => Ms;
   private readonly canWrite: boolean;
 
+  /** INDEXER lane — the measured 1-rps constraint (T-S4) applies here only. */
   private readonly gate = new SerialGate();
+  /** RPC lane. `getMarketOnchain` / `getBinaryOrderBook` / balance reads are
+   *  `eth_call`s, not indexer queries, and the node tolerates concurrency
+   *  (THROTTLE.rpcMaxInFlight = 4). Sharing the indexer lane starved the WRITE
+   *  path: quotes refresh every 1.5s across every market, so a placeOrder's
+   *  status read queued behind them and blew the 30s TxQueue timeout while the
+   *  same call took 1.5s in isolation. Reads must never starve writes. */
+  private readonly rpcGate = new SerialGate();
   private marketsCache: CacheEntry<Market[]> | null = null;
   private readonly quoteCache = new Map<string, CacheEntry<Quote>>();
   private readonly onchainCache = new Map<string, CacheEntry<SdkOnchainMarket | null>>();
@@ -239,6 +258,8 @@ export class DreamDEXVenue implements Venue {
     this.lotRaw = o.lotRaw ?? 1n;
     this.minSize = o.minSize ?? 1;
     this.feeBps = o.feeBps ?? 0;
+    this.boundary = o.boundary;
+    this.minTteMs = Math.max(0, (o.minSecondsToExpiry ?? 0) * 1_000);
     this.marketsCacheMs = o.marketsCacheMs ?? 15_000;
     this.quoteCacheMs = o.quoteCacheMs ?? 1_500;
     this.maxQuoteAgeMs = o.maxQuoteAgeMs ?? 4_000;
@@ -318,9 +339,42 @@ export class DreamDEXVenue implements Venue {
     }
     const rows = await this.gate.run(() =>
       this.c.listBinaryMarkets({ venueId: this.venueId, status: 'Trading', limit: 50 }));
-    const markets = rows.map((r) => this.rowToMarket(r));
+    const all = rows.map((r) => this.rowToMarket(r));
+    await this.postBoundaries(all, rows);
+    // A market we cannot round-trip in is not tradable — see tradableByTime.
+    const markets = this.minTteMs > 0
+      ? all.filter((m) => tradableByTime(m, now, this.minTteMs))
+      : all;
     this.marketsCache = { v: markets, atMs: now };
     return markets;
+  }
+
+  /**
+   * Fill in the boundary of every `reference` market from the oracle price feed.
+   * The indexer row carries `strike: "0"` (the reference sentinel) and never
+   * posts the opening price, so without this every such market is skipped with
+   * BOUNDARY_NOT_POSTED and the agent cannot trade at all (RFC-001 A4).
+   * A market whose boundary is not knowable yet is left untouched — it keeps
+   * skipping, which is the honest outcome, rather than being priced off a guess.
+   */
+  private async postBoundaries(markets: Market[], rows: SdkMarketRow[]): Promise<void> {
+    const src = this.boundary;
+    if (!src) return;
+    await Promise.all(markets.map(async (mk, i) => {
+      if (mk.mode !== 'reference' || mk.boundaryPosted) return;
+      const startSec = Number(rows[i]?.tradingStart ?? 0);
+      if (!(startSec > 0)) return;
+      try {
+        const open = await src.resolve(mk.asset, startSec);
+        if (open !== null && open > 0) {
+          mk.strike = open;
+          mk.boundaryPosted = true;
+        }
+      } catch (e) {
+        // A feed outage must never break market listing.
+        this.note(e);
+      }
+    }));
   }
 
   async settledMarkets(limit = 40): Promise<Market[]> {
@@ -339,7 +393,7 @@ export class DreamDEXVenue implements Venue {
     const now = this.nowFn();
     const hit = this.onchainCache.get(marketId);
     if (hit && now - hit.atMs < 1_000) return hit.v;
-    const v = await this.gate.run(() => this.c.getMarketOnchain(marketId));
+    const v = await this.rpcGate.run(() => this.c.getMarketOnchain(marketId));
     this.onchainCache.set(marketId, { v, atMs: now });
     return v;
   }
@@ -354,7 +408,7 @@ export class DreamDEXVenue implements Venue {
     const mk = markets.find((m) => m.id === marketId);
     if (!mk) throw new Error(`DreamDEXVenue: unknown market ${marketId}`);
 
-    const ob = await this.gate.run(() => this.c.fetchOrderBook(mk.yesSymbol, 5));
+    const ob = await this.rpcGate.run(() => this.c.fetchOrderBook(mk.yesSymbol, 5));
     // Prices from the book are already YES probabilities in (0,1) (T-S3).
     const bid = ob.bids[0]?.[0] ?? 0;
     const ask = ob.asks[0]?.[0] ?? 1;
@@ -565,7 +619,7 @@ export class DreamDEXVenue implements Venue {
     for (const mk of markets) {
       let bal: { yes: number; no: number };
       try {
-        bal = await this.gate.run(() => this.c.outcomeBalances(mk.id));
+        bal = await this.rpcGate.run(() => this.c.outcomeBalances(mk.id));
       } catch (e) {
         this.note(e);
         continue;
@@ -590,7 +644,7 @@ export class DreamDEXVenue implements Venue {
   async balanceUsd(agent?: AgentId): Promise<Usd> {
     if (agent !== undefined && agent !== this.agent) return 0;
     try {
-      return Math.max(0, await this.gate.run(() => this.c.collateralBalance()));
+      return Math.max(0, await this.rpcGate.run(() => this.c.collateralBalance()));
     } catch (e) {
       this.note(e);
       return 0;
@@ -606,7 +660,7 @@ export class DreamDEXVenue implements Venue {
       try { chain = await this.onchain(mk.id); } catch (e) { this.note(e); continue; }
       if (!chain || chain.winningOutcome === null || chain.winningOutcome === undefined) continue;
       let bal: { yes: number; no: number };
-      try { bal = await this.gate.run(() => this.c.outcomeBalances(mk.id)); } catch (e) { this.note(e); continue; }
+      try { bal = await this.rpcGate.run(() => this.c.outcomeBalances(mk.id)); } catch (e) { this.note(e); continue; }
       const winIdx = chain.winningOutcome === 0 ? 0 : 1;
       const size = winIdx === 0 ? bal.yes : bal.no;
       if (size <= 0) continue;                // a losing outcome is never claimable

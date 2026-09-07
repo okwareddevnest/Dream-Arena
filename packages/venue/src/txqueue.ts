@@ -49,7 +49,11 @@ export class NonceManager {
   private readonly pending = new Set<number>();
   private resyncs = 0;
 
-  constructor(private readonly source: NonceSource) {}
+  private readonly source: NonceSource;
+  // Explicit field, not a parameter property: Node's strip-only TypeScript mode
+  // (`node --experimental-strip-types`) cannot compile parameter properties, and
+  // the agent entrypoint runs straight off source with no build step.
+  constructor(source: NonceSource) { this.source = source; }
 
   get resyncCount(): number { return this.resyncs; }
   get pendingCount(): number { return this.pending.size; }

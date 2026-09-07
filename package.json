@@ -20,7 +20,7 @@
     "test:all": "vitest run",
     "ci": "npm run typecheck && npm run test && npm run test:web && npm run test:integration && npm run test:fault",
     "gate:0": "node packages/ops/scripts/gate-g0.mjs",
-    "agent": "node --experimental-strip-types packages/ops/src/main.ts",
+    "agent": "node --env-file-if-exists=.env --experimental-strip-types packages/ops/src/main.ts",
     "test:web": "vitest run --project web",
     "fund": "node --env-file-if-exists=.env packages/ops/scripts/fund.mjs",
     "test:live": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --project live",
