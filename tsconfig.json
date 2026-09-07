@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "_comment": "No `paths` mapping: npm workspaces already symlink node_modules/@arena/* to packages/*, and having BOTH routes makes tsc treat one file as two unrelated modules ('Two different types with this name exist'). One resolution route only.",
+  "include": [
+    "packages/*/src/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "apps/web/.next"
+  ]
+}

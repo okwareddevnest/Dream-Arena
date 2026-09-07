@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+.env.example
+state/journal/*.jsonl
+state/logs/*.json
+state/logs/*.jsonl
+*.log
+.DS_Store
+coverage/
+
+# next
+apps/web/.next/
+apps/web/next-env.d.ts
+apps/web/tsconfig.tsbuildinfo
+
+docs/
+*.md
+!README.md
