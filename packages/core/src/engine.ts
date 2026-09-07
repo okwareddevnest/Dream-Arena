@@ -35,6 +35,18 @@ import { RiskGuard } from './risk.ts';
 
 /** Submits an order, serialized and deduped. Satisfied by TxQueue (T-033); the
  *  engine takes the interface so it can be tested without one. */
+/** Default order lifetime. Must exceed real settlement latency: a serialized
+ *  on-chain write was measured at 25-35s under agent load, and the previous
+ *  6s heuristic (quoteCacheMs * 4) meant every LIVE order was rejected with
+ *  "order expiry is not in the future" before it could be submitted. */
+export const DEFAULT_ORDER_TTL_MS = 45_000;
+
+/** Order expiry: `now + ttl`, never past the market's own expiry (RFC-001 A2). */
+export function orderExpiryMs(nowMs: number, marketExpiryMs: number, ttlMs: number): number {
+  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : DEFAULT_ORDER_TTL_MS;
+  return Math.min(marketExpiryMs, nowMs + ttl);
+}
+
 export interface OrderSubmitter {
   submit<T>(task: { clientOrderId: string; run: (nonce: number) => Promise<T> }): Promise<T>;
 }
@@ -49,6 +61,10 @@ export interface EngineOptions {
   /** Bankroll source. Read per decision so a claim or a loss is reflected. */
   balance?: () => Usd;
   submitter?: OrderSubmitter;
+  /** How long an order may rest before the venue expires it. Must exceed the
+   *  time it takes a write to reach the chain, or every order is dead on
+   *  arrival. Defaults to DEFAULT_ORDER_TTL_MS. */
+  orderTtlMs?: number;
   /** Cache window for market listings (T-S4: the indexer dies on fan-out). */
   marketsCacheMs?: number;
   quoteCacheMs?: number;
@@ -83,6 +99,7 @@ export class Engine {
   private readonly submitter: OrderSubmitter | undefined;
   private readonly balanceFn: (() => Usd) | undefined;
   private readonly marketsCacheMs: number;
+  private readonly orderTtlMs: number;
   private readonly quoteCacheMs: number;
   private readonly onJournal: EngineOptions['onJournal'];
 
@@ -110,6 +127,7 @@ export class Engine {
     this.submitter = o.submitter;
     this.balanceFn = o.balance;
     this.marketsCacheMs = o.marketsCacheMs ?? 15_000;
+    this.orderTtlMs = o.orderTtlMs ?? DEFAULT_ORDER_TTL_MS;
     this.quoteCacheMs = o.quoteCacheMs ?? 1_500;
     this.onJournal = o.onJournal;
     this.guard = new RiskGuard({ risk: o.risk, agent: o.agent, bus: o.bus });
@@ -260,7 +278,7 @@ export class Engine {
       // RFC-001 A2: expiry is mandatory and capped at the market's own expiry.
       // Set just past the requote interval so a crashed agent's orders age off
       // the book by themselves rather than resting with escrow locked.
-      expiresMs: Math.min(mk.expiryMs, tsMs + Math.max(5_000, this.quoteCacheMs * 4)),
+      expiresMs: orderExpiryMs(tsMs, mk.expiryMs, this.orderTtlMs),
       signalId: signal.id,
       tsMs,
     };

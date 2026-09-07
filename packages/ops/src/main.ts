@@ -49,6 +49,7 @@ if (cfg.venueMode === 'LIVE') {
     // 5m series roll continuously; without this MIRA draws markets with seconds
     // left and every order expires inside the write queue.
     minSecondsToExpiry: Number(process.env.MIN_SECONDS_TO_EXPIRY ?? 90),
+    rpcMaxInFlight: cfg.throttle.rpcMaxInFlight,
     marketsCacheMs: cfg.throttle.marketsCacheMs,
     quoteCacheMs: cfg.throttle.quoteCacheMs,
     maxQuoteAgeMs: cfg.risk.maxQuoteAgeMs,

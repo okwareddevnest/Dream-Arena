@@ -65,6 +65,18 @@ const STATUS_ORDINAL: Record<string, number> = {
   Listed: 0, Trading: 1, Locked: 2, Settling: 3, Resolved: 4, Finalized: 4, Voided: 5,
 };
 
+/** Log any single SDK step slower than this. Writes have a 30s queue budget, so
+ *  a step over ~3s is the thing worth seeing. */
+const SLOW_MS = Number(process.env.SDK_SLOW_MS ?? 3000);
+const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+  const t0 = Date.now();
+  try { return await fn(); }
+  finally {
+    const ms = Date.now() - t0;
+    if (ms >= SLOW_MS) console.log(`${new Date().toISOString()} SDK SLOW ${label} ${ms}ms`);
+  }
+};
+
 export interface RealSdkClientOptions {
   privateKey?: string | null;
   venueId: string;
@@ -105,7 +117,14 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
   });
   // GOTCHA (F-05): `ex.walletAddress` is undefined — derive the owner ourselves.
   const owner = key ? privateKeyToAccount(key).address : null;
-  const pub = createPublicClient({ chain, transport: http(rpcUrl) });
+  // An untimed transport is how a write path hangs forever: `getTransactionCount`
+  // is the FIRST thing TxQueue awaits when reserving a nonce, and it sits outside
+  // the queue's own timeout. A dropped request there stalls every write behind it
+  // (observed: submit->queue logged, `run` never invoked, 30s timeout, no tx sent).
+  const pub = createPublicClient({
+    chain,
+    transport: http(rpcUrl, { timeout: 8_000, retryCount: 2, retryDelay: 250 }),
+  });
 
   /** marketId → its row, so a symbol can reach a pool without re-querying. */
   const rowCache = new Map<string, SdkMarketRow>();
@@ -163,9 +182,9 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
     async placeOrderRaw(args): Promise<SdkTxResult> {
       requireSigner('placeOrderRaw');
       const { marketId } = parseOutcomeSymbol(args.outcomeSymbol);
-      const row = await rowFor(marketId);
-      const oc: any = await ex.client.getMarketOnchain(marketId);
-      const res: any = await ex.trader.placeOrder({
+      const row = await timed('placeOrder:rowFor', () => rowFor(marketId));
+      const oc: any = await timed('placeOrder:getMarketOnchain', () => ex.client.getMarketOnchain(marketId));
+      const res: any = await timed('placeOrder:trader.placeOrder', () => ex.trader.placeOrder({
         pool: row.poolAddress,
         side: sideFromKind(args.kind),          // F-01: string, never the ordinal
         price: args.priceRaw,
@@ -177,7 +196,7 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
         orderType: args.orderType,
         expireTimestampNs: args.expireTimestampNs,
         autoApprove: true,
-      });
+      }));
       // Nonce is handled by the SDK's own tracker; the venue's TxQueue still
       // serialises submissions so one key never has two writes in flight.
       return { hash: res.hash, receipt: res.receipt, orderId: res.orderId != null ? String(res.orderId) : undefined };

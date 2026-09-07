@@ -42,8 +42,9 @@ import {
   type Market, type MarketMode, type MarketStatus, type Ms, type Order, type OrderAck,
   type Position, type Prob, type Quote, type Side, type Usd, type Venue, type VenueHealth,
 } from '@arena/shared';
-import type { NonceManager, TxQueue } from './txqueue.ts';
+import { dbg, type NonceManager, type TxQueue } from './txqueue.ts';
 import { tradableByTime, type BoundarySource } from './boundary.ts';
+import { ConcurrentGate } from './gate.ts';
 
 /** A raw binary-market row as the indexer returns it (T-S2, observed live). */
 export interface SdkMarketRow {
@@ -135,6 +136,8 @@ export interface DreamDEXVenueOptions {
    *  SDK write takes seconds, so an order on a market with moments left expires
    *  before it can be submitted. 0 disables (prior behaviour). */
   minSecondsToExpiry?: number;
+  /** Concurrent `eth_call`s allowed. THROTTLE.rpcMaxInFlight (4); 1 serialises. */
+  rpcMaxInFlight?: number;
   /** Measured caches (T-S4). */
   marketsCacheMs?: number;
   quoteCacheMs?: number;
@@ -183,16 +186,6 @@ export function assertTxOk(res: SdkTxResult, label: string): void {
   }
 }
 
-/** Serializes indexer reads to one in flight. T-S4: concurrency is what breaks it. */
-class SerialGate {
-  private tail: Promise<unknown> = Promise.resolve();
-  run<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.tail.then(() => undefined, () => undefined).then(fn);
-    this.tail = next.then(() => undefined, () => undefined);
-    return next;
-  }
-}
-
 interface CacheEntry<T> { v: T; atMs: Ms }
 
 export class DreamDEXVenue implements Venue {
@@ -218,14 +211,14 @@ export class DreamDEXVenue implements Venue {
   private readonly canWrite: boolean;
 
   /** INDEXER lane — the measured 1-rps constraint (T-S4) applies here only. */
-  private readonly gate = new SerialGate();
+  private readonly gate = new ConcurrentGate(1);
   /** RPC lane. `getMarketOnchain` / `getBinaryOrderBook` / balance reads are
    *  `eth_call`s, not indexer queries, and the node tolerates concurrency
    *  (THROTTLE.rpcMaxInFlight = 4). Sharing the indexer lane starved the WRITE
    *  path: quotes refresh every 1.5s across every market, so a placeOrder's
    *  status read queued behind them and blew the 30s TxQueue timeout while the
    *  same call took 1.5s in isolation. Reads must never starve writes. */
-  private readonly rpcGate = new SerialGate();
+  private readonly rpcGate: ConcurrentGate;
   private marketsCache: CacheEntry<Market[]> | null = null;
   private readonly quoteCache = new Map<string, CacheEntry<Quote>>();
   private readonly onchainCache = new Map<string, CacheEntry<SdkOnchainMarket | null>>();
@@ -260,6 +253,7 @@ export class DreamDEXVenue implements Venue {
     this.feeBps = o.feeBps ?? 0;
     this.boundary = o.boundary;
     this.minTteMs = Math.max(0, (o.minSecondsToExpiry ?? 0) * 1_000);
+    this.rpcGate = new ConcurrentGate(o.rpcMaxInFlight ?? 4);
     this.marketsCacheMs = o.marketsCacheMs ?? 15_000;
     this.quoteCacheMs = o.quoteCacheMs ?? 1_500;
     this.maxQuoteAgeMs = o.maxQuoteAgeMs ?? 4_000;
@@ -511,8 +505,9 @@ export class DreamDEXVenue implements Venue {
     try {
       // Writes go through the queue, never straight to the RPC: one key, one
       // nonce stream (T-033). A missing queue is a configuration error.
+      dbg(`VENUE submit->queue ${order.clientOrderId}`);
       const res = this.queue
-        ? await this.queue.submit({ clientOrderId: order.clientOrderId, run: submit })
+        ? await this.queue.submit({ clientOrderId: order.clientOrderId, run: (n) => { dbg(`VENUE run ${order.clientOrderId} nonce=${n}`); return submit(n); } })
         : await submit(await this.fallbackNonce());
       // gotcha 2: the SDK resolves reverted writes without throwing.
       assertTxOk(res, `placeOrder ${order.clientOrderId}`);

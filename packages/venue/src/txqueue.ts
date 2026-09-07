@@ -19,6 +19,12 @@
 // permanent gap and every later transaction would sit unmined behind it.
 import type { Ms } from '@arena/shared';
 
+/** Write-path tracing. Off unless DEBUG_TX is set; the write path is the hardest
+ *  part of this system to observe after the fact, so the hooks stay in place. */
+export const dbg = (m: string): void => {
+  if (process.env.DEBUG_TX) console.log(`${new Date().toISOString()} ${m}`);
+};
+
 export interface NonceSource {
   /** Current on-chain transaction count for the signer. */
   getTransactionCount(): Promise<number>;
@@ -60,8 +66,18 @@ export class NonceManager {
 
   async reserve(): Promise<number> {
     if (this.next === null) {
+      // NEVER leave a settled-rejected (or hung) promise memoized here: this is
+      // the first thing every write awaits, and caching a failure disables the
+      // signing key for the life of the process. Clear it on failure so the next
+      // caller re-reads the chain.
       this.init ??= this.source.getTransactionCount();
-      const start = await this.init;
+      let start: number;
+      try {
+        start = await this.init;
+      } catch (e) {
+        this.init = null;
+        throw e;
+      }
       // Only the first caller through assigns; the rest fall through to the
       // increment below and so cannot clobber a counter already in use.
       if (this.next === null) this.next = start;
@@ -178,6 +194,7 @@ export class TxQueue {
   }
 
   private async execute<T>(task: TxTask<T>): Promise<T> {
+    dbg(`TQ execute ${task.clientOrderId}`);
     this.depthCount--;
     this.inFlightCount++;
     const isClash = task.isNonceClash ?? DEFAULT_NONCE_CLASH;
@@ -189,7 +206,9 @@ export class TxQueue {
   }
 
   private async attempt<T>(task: TxTask<T>, isClash: (e: unknown) => boolean, isRetry: boolean): Promise<T> {
+    dbg(`TQ reserve-begin ${task.clientOrderId}`);
     const nonce = await this.nonces.reserve();
+    dbg(`TQ reserve-ok ${task.clientOrderId} nonce=${nonce}`);
     try {
       const out = await this.withTimeout(task.run(nonce), task.clientOrderId);
       this.nonces.confirm(nonce);

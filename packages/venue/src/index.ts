@@ -27,3 +27,6 @@ export type { RealSdkClientOptions, OutcomeSide } from './sdkClient.ts';
 // Reference-mode boundary resolver (RFC-001 A4) — without it every live market skips.
 export { createBoundarySource, feedSymbolFor, scaleFeedPrice, bucketFor, FEED_DECIMALS, BUCKET_SECONDS, DEFAULT_FEED_URL } from './boundary.ts';
 export type { BoundarySource, BoundarySourceOptions } from './boundary.ts';
+
+// Concurrency lanes — the indexer limit (1) is NOT the RPC limit (4).
+export { ConcurrentGate } from './gate.ts';
