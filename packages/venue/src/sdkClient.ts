@@ -296,8 +296,11 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
 
     async mintSet(args): Promise<SdkTxResult> {
       requireSigner('mintSet');
+      // GOTCHA: the param is `amount` (collateral in → equal YES+NO out), NOT
+      // `quantity`. Passing the wrong name made the SDK do BigInt(undefined) and
+      // throw "Cannot convert undefined to a BigInt" on every mint.
       const res: any = await ex.trader.mintSet({
-        pool: await poolFor(args.marketId), quantity: args.quantityRaw, autoApprove: true,
+        pool: await poolFor(args.marketId), amount: args.quantityRaw, autoApprove: true,
       });
       return { hash: res.hash, receipt: res.receipt };
     },

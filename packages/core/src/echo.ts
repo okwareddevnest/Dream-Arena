@@ -30,6 +30,44 @@ import {
   type Quote, type RiskConfig, type Side, type Venue,
 } from '@arena/shared';
 import { RiskGuard } from './risk.ts';
+import { DEFAULT_ORDER_TTL_MS } from './engine.ts';
+
+/**
+ * Pull a post-only quote to just inside the resting book.
+ *
+ * A maker that crosses is not a maker: the venue rejects it outright
+ * (PostOnlyWouldCross), and if it did rest it would eat the book and manufacture
+ * fake volume. Prices are YES-convention probabilities, so a NO bid at `q` is a
+ * YES offer at `1 - q` and must clear the YES *bid* instead of the ask.
+ *
+ * @returns the price to quote, or null when there is no room to rest.
+ */
+export function clampToBook(
+  side: Side,
+  price: number,
+  book: { bid: number | null; ask: number | null },
+  tick: number,
+): number | null {
+  const step = tick > 0 ? tick : 0.001;
+  // The first price that would cross, in this side's own convention.
+  const barrier = side === 'YES'
+    ? book.ask                                   // a YES bid must stay under the ask
+    : (book.bid === null ? null : 1 - book.bid); // a NO bid must stay under 1 - yesBid
+  // Work in whole ticks. The grid is integral and float division is not:
+  // 0.051 / 0.001 is 50.99999999999999, so flooring silently loses a tick, and
+  // 1 - 0.999 lands a hair ABOVE 0.001. Integers have neither failure mode, and
+  // the pool rejects off-grid prices anyway.
+  const ticks = (x: number): number => Math.round(x / step);
+  const maxTick = ticks(1) - 1;
+  let t = ticks(price);
+  if (barrier !== null) {
+    const bt = ticks(barrier);
+    if (t >= bt) t = bt - 1;          // rest one tick inside the book
+  }
+  if (t < 1) return null;             // no room between zero and the barrier
+  if (t > maxTick) t = maxTick;
+  return Number((t * step).toFixed(9));
+}
 
 export interface EchoOptions {
   venue: Venue;
@@ -162,6 +200,11 @@ export class EchoAgent {
   private async requote(mk: Market, fair: number, nowMs: Ms): Promise<void> {
     await this.cancelFor(mk.id);
 
+    // The resting book, so a post-only quote can be placed just inside it.
+    // A quote we cannot read is quoted blind rather than skipped: the clamp
+    // simply has no barrier to apply.
+    const q: Quote | null = await this.venue.getQuote(mk.id).catch(() => null);
+
     const inv = this.net.get(mk.id) ?? 0;
     const half = this.maxInventory / 2;
 
@@ -176,8 +219,15 @@ export class EchoAgent {
       // Quoting a BUY of `side` means resting a bid on that outcome. A YES bid
       // sits below fair; a NO bid sits below (1 - fair).
       const base = side === 'YES' ? fair : 1 - fair;
-      const price = base - this.spread / 2;
-      if (!(price > 0) || !(price < 1)) continue;
+      const wanted = base - this.spread / 2;
+      if (!(wanted > 0) || !(wanted < 1)) continue;
+
+      // Post-only: never cross what is already resting. On a mispriced book our
+      // fair can sit far above the best ask, and an unclamped quote is rejected
+      // outright rather than resting.
+      const tick = Number(mk.tickRaw) / 10 ** mk.priceDecimals;
+      const price = clampToBook(side, wanted, { bid: q?.bid ?? null, ask: q?.ask ?? null }, tick);
+      if (price === null) continue;
 
       // RFC-001 A6: to also OFFER the outcome later, ECHO needs inventory.
       // Minting once per market gives it both tokens to work with.
@@ -231,7 +281,11 @@ export class EchoAgent {
       sizeRaw: BigInt(Math.round(this.quoteSize * scale)),
       // Just past the requote interval, so a crashed maker's quotes age off the
       // book by themselves (bot-kit gotcha 5).
-      expiresMs: Math.min(mk.expiryMs, nowMs + this.refreshMs * 2),
+      // The quote must outlive the WRITE, not just the requote interval. At the
+      // default 10s refresh this was a 20s life, but a serialized on-chain write
+      // can take longer, and the pool then rejects it with OrderAlreadyExpired().
+      // Same lesson as the engine's order TTL.
+      expiresMs: Math.min(mk.expiryMs, nowMs + Math.max(this.refreshMs * 2, DEFAULT_ORDER_TTL_MS)),
       signalId: null,
       tsMs: nowMs,
     };

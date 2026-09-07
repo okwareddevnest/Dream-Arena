@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { VirtualClock, type Market, type RiskConfig } from '@arena/shared';
 import { EventBus } from '@arena/data';
 import { SimulatedVenue } from '@arena/venue';
+import { DEFAULT_ORDER_TTL_MS } from '../engine.ts';
 import { EchoAgent } from '../echo.ts';
 import { Persona, type QuipTrigger } from '../persona.ts';
 import { Engine } from '../engine.ts';
@@ -96,13 +97,22 @@ describe('T-026 two-sided quoting', () => {
     for (const c of spy.mock.calls) expect(c[0].type).toBe('POST_ONLY');
   });
 
-  it('sets an expiry just past the requote interval (gotcha 5)', async () => {
+  // AMENDED after a LIVE failure. This originally required the expiry to sit
+  // just past the requote interval, so a crashed agent's quotes would age off
+  // the book on their own. On a real chain that made them age off before they
+  // ever reached it: at refreshMs 8s the 16s life was shorter than a serialized
+  // write, and the pool rejected every quote with OrderAlreadyExpired().
+  // The self-ageing property is kept, floored at the write-survival TTL — and
+  // resting escrow is bounded anyway by cancelFor() on each requote.
+  it('sets an expiry that outlives the write but still ages off (gotcha 5)', async () => {
     const { echo, echoVenue } = await rig({ echo: { refreshMs: 8_000 } });
     const spy = vi.spyOn(echoVenue, 'placeOrder');
     await echo.cycle(await markets(echoVenue), () => 0.4, true);
+    expect(spy.mock.calls.length).toBeGreaterThan(0);
     for (const c of spy.mock.calls) {
-      expect(c[0].expiresMs).toBeGreaterThan(c[0].tsMs);
-      expect(c[0].expiresMs).toBeLessThanOrEqual(c[0].tsMs + 16_000);
+      const life = c[0].expiresMs - c[0].tsMs;
+      expect(life, 'must survive an on-chain write').toBeGreaterThanOrEqual(DEFAULT_ORDER_TTL_MS);
+      expect(life, 'but must still age off unattended').toBeLessThanOrEqual(120_000);
     }
   });
 

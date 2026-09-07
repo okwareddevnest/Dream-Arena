@@ -25,7 +25,8 @@
     "fund": "node --env-file-if-exists=.env packages/ops/scripts/fund.mjs",
     "test:live": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run --project live",
     "smoke:live": "node --env-file-if-exists=.env packages/ops/scripts/live-roundtrip.mjs",
-    "probe:markets": "node --env-file-if-exists=.env packages/ops/scripts/probe-markets.mjs"
+    "probe:markets": "node --env-file-if-exists=.env packages/ops/scripts/probe-markets.mjs",
+    "echo": "node --env-file-if-exists=.env --experimental-strip-types packages/ops/src/echoMain.ts"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.13",

@@ -189,6 +189,11 @@ const INDEXER_STATUS: Record<string, MarketStatus> = {
 /** The pool's way of saying "that order is expired": it has no owner any more. */
 const EXPIRED_ORDER = /IncorrectSender\([^,]+,\s*0x0+\)/i;
 
+/** Any IncorrectSender means the order is not ours to cancel — either it expired
+ *  (owner 0x0) or the id now resolves to someone else's order, because pools
+ *  recycle. Retrying can only ever burn gas, so the order is forgotten. */
+const NOT_OURS = /IncorrectSender\(/i;
+
 export const STRIKE_SCALE = 100;
 export function decodeStrike(raw: string | number | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;
@@ -261,6 +266,8 @@ export class DreamDEXVenue implements Venue {
   /** Chain fill ids already published, so the taker and maker paths cannot
    *  double-report the same trade. */
   private readonly seenChainFills = new Set<string>();
+  /** Orders the pool refused to cancel as not ours — never signed for again. */
+  private readonly deadOrders = new Set<string>();
   private fillCbs: ((f: Fill) => void)[] = [];
   private connected = false;
   private lastErrorMs: Ms | null = null;
@@ -571,6 +578,12 @@ export class DreamDEXVenue implements Venue {
 
   async cancel(clientOrderId: string): Promise<CancelAck> {
     const now = this.nowFn();
+    // An order the pool rejected as not ours is gone, not filled. Without this
+    // the ACCEPTED ack below would report ALREADY_FILLED and a caller could book
+    // a position that never existed.
+    if (this.deadOrders.has(clientOrderId)) {
+      return { clientOrderId, status: 'NOT_FOUND', txHash: null, tsMs: now };
+    }
     const orderId = this.venueOrderIds.get(clientOrderId);
     if (!orderId) {
       const known = this.seenOrders.get(clientOrderId);
@@ -581,7 +594,11 @@ export class DreamDEXVenue implements Venue {
       };
     }
     const ack = this.seenOrders.get(clientOrderId);
-    const marketId = ack ? this.marketIdFor(clientOrderId) : null;
+    // ownOrderMarkets is recorded at placement and is the reliable source; the
+    // ack-derived lookup returns null for an order placed in an earlier cycle,
+    // which reached the adapter as marketId "" ("no market row for ").
+    const marketId = this.ownOrderMarkets.get(clientOrderId)
+      ?? (ack ? this.marketIdFor(clientOrderId) : null);
     try {
       const res = this.queue
         ? await this.queue.submit({
@@ -595,6 +612,15 @@ export class DreamDEXVenue implements Venue {
       return { clientOrderId, status: 'CANCELLED', txHash: res.hash ?? null, tsMs: now };
     } catch (e) {
       this.note(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      // Forget an order the pool says is not ours: retrying signs a transaction
+      // that can only revert. A transient failure is NOT forgotten, so it can
+      // still be retried.
+      if (NOT_OURS.test(msg)) {
+        this.venueOrderIds.delete(clientOrderId);
+        this.ownOrderMarkets.delete(clientOrderId);
+        this.deadOrders.add(clientOrderId);
+      }
       // Cancelling something already gone is not an error worth throwing.
       return { clientOrderId, status: 'NOT_FOUND', txHash: null, tsMs: now };
     }
