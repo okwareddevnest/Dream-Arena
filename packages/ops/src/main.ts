@@ -7,6 +7,7 @@ import { loadConfig, SystemClock, VirtualClock, type Market, type Usd } from '@a
 import { EventBus, Journal, Ingester, Store, binanceSource } from '@arena/data';
 import { Engine } from '@arena/core';
 import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource, Reconciler, ClaimLoop } from '@arena/venue';
+import { startArenaServer } from './server.ts';
 
 const cfg = loadConfig();
 const clock = new SystemClock();
@@ -121,6 +122,36 @@ const stopReconciler = reconciler.start(
   (h) => clearInterval(h),
 );
 
+// Markets reach the UI through Store.applyMarkets, not the bus: there is no
+// 'markets' bus topic and IF §13 is frozen. getMarkets is cached, so this is
+// cheap; without it the arena page has valuations for markets it cannot name.
+const pushMarkets = async () => {
+  try { store.applyMarkets(await venue.getMarkets()); }
+  catch (e) { log(`WARN markets refresh: ${(e as Error).message}`); }
+};
+await pushMarkets();
+const marketsTimer = setInterval(() => { void pushMarkets(); }, cfg.throttle.marketsCacheMs);
+
+// ── API + WebSocket ─────────────────────────────────────────────────────────
+// Served from THIS process: the bus is in-process (ARCH §1), so the API reads
+// the same live bus and Store the engine writes. A separate process would need
+// Redis — the documented upgrade path, not something the demo needs.
+const server = await startArenaServer({
+  cfg, bus, clock, store, venue,
+  agentProfile: () => ({
+    agent: 'MIRA', mode: cfg.venueMode, runId: cfg.runId,
+    strategy: 'EWMV volatility forecast (F4) → F1 expiry probability → quarter-Kelly',
+    risk: cfg.risk, stats: engine.statsSnapshot(),
+  }),
+  kill: (by) => { engine.riskGuard.kill(by); journal.append('kill', { by, tsMs: clock.now() }); },
+  unkill: (by) => { engine.riskGuard.unkill(by); journal.append('kill', { by, unkill: true, tsMs: clock.now() }); },
+  setMode: (m) => { log(`console: setMode ${m} (RFC-003 keeps the demo on LIVE)`); },
+  triggerScenario: (n) => { log(`console: scenario ${n} is a SIM-only facility`); },
+  journalForecast: (f) => { journal.append('forecast', f); },
+  onSettle: (st) => journal.append('settlement', st),
+  log,
+});
+
 // ── Maker-side fills ────────────────────────────────────────────────────────
 // Fills WE cause come back in the placeOrder result. A fill where someone hits a
 // quote we are resting exists only on the chain's live tail — which is exactly
@@ -189,6 +220,8 @@ const shutdown = async (why: string) => {
   try { stopReconciler(); } catch { /* already stopped */ }
   try { stopClaims(); } catch { /* already stopped */ }
   try { stopMakerFills(); } catch { /* already stopped */ }
+  try { clearInterval(marketsTimer); } catch { /* already stopped */ }
+  try { await server.stop(); } catch { /* already stopped */ }
   // Cancel resting orders before letting go of the key — an abandoned order is
   // a real position on a real chain.
   try { const acks = await venue.cancelAll('MIRA'); log(`cancelled ${acks.length} resting order(s)`); }

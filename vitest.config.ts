@@ -20,7 +20,7 @@ export default defineConfig({
         plugins: [react()],
         test: {
           ...base, name: 'web', environment: 'jsdom',
-          include: ['apps/web/__tests__/**/*.test.tsx'], testTimeout: 300_000,
+          include: ['apps/web/__tests__/**/*.test.{ts,tsx}'], testTimeout: 300_000,
           fileParallelism: false,
         },
       },

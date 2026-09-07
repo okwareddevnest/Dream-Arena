@@ -182,6 +182,11 @@ export class Store {
   setJournalSeq(n: number): void { this.journalSeq = n; }
 
   // ── Reads ────────────────────────────────────────────────────────────────
+  /** Latest quote for a market, or null. MIRROR needs the real book a fill was
+   *  priced against — synthesising one from a valuation would put a made-up
+   *  price in front of a user about to sign a transaction. */
+  quote(marketId: string): Quote | null { return this.quotes.get(marketId) ?? null; }
+
   position(marketId: string, agent: AgentId): Position | null {
     const b = this.books.get(key(marketId, agent));
     return b ? this.toPosition(b) : null;
