@@ -199,6 +199,9 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
       }));
       // Nonce is handled by the SDK's own tracker; the venue's TxQueue still
       // serialises submissions so one key never has two writes in flight.
+      if (process.env.DEBUG_TX) {
+        console.log(`${new Date().toISOString()} SDK place result hash=${res.hash} orderId=${res.orderId} keys=${Object.keys(res ?? {}).join(',')}`);
+      }
       return { hash: res.hash, receipt: res.receipt, orderId: res.orderId != null ? String(res.orderId) : undefined };
     },
 
@@ -206,6 +209,16 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
       requireSigner('cancelOrder');
       const res: any = await ex.trader.cancelOrder({
         pool: await poolFor(args.marketId), orderId: args.orderId,
+      });
+      return { hash: res.hash, receipt: res.receipt };
+    },
+
+    async cancelExpiredOrders(args): Promise<SdkTxResult> {
+      requireSigner('cancelExpiredOrders');
+      // Reclaims escrow from orders the pool considers expired; a normal cancel
+      // on one reverts with IncorrectSender(caller, 0x0) and leaves it locked.
+      const res: any = await ex.trader.cancelExpiredOrders({
+        pool: await poolFor(args.marketId), orderIds: args.orderIds,
       });
       return { hash: res.hash, receipt: res.receipt };
     },

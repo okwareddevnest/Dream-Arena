@@ -156,6 +156,8 @@ export class TxQueue {
   private readonly results = new Map<string, Promise<unknown>>();
   private depthCount = 0;
   private inFlightCount = 0;
+  /** Ids whose `run` is on the stack right now — see the re-entrancy guard. */
+  private readonly executing = new Set<string>();
   private stats = { submitted: 0, completed: 0, failed: 0, deduped: 0, retried: 0, timedOut: 0 };
 
   constructor(opts: TxQueueOptions) {
@@ -173,6 +175,16 @@ export class TxQueue {
    * settled — never before, and never concurrently.
    */
   submit<T>(task: TxTask<T>): Promise<T> {
+    // Re-entrancy: a task that is CURRENTLY EXECUTING cannot also be waiting on
+    // itself. Returning the memoized promise here deadlocks until the timeout
+    // and sends nothing. Deduping a queued or finished id stays correct.
+    if (this.executing.has(task.clientOrderId)) {
+      return Promise.reject(new Error(
+        `TxQueue: re-entrant submit of ${task.clientOrderId} — this task is already ` +
+        `executing and awaiting itself would deadlock. Writes must pass through ` +
+        `exactly one queue: do not give the Engine the venue's own TxQueue as its submitter.`,
+      ));
+    }
     const existing = this.results.get(task.clientOrderId);
     if (existing) {
       this.stats.deduped++;
@@ -197,11 +209,13 @@ export class TxQueue {
     dbg(`TQ execute ${task.clientOrderId}`);
     this.depthCount--;
     this.inFlightCount++;
+    this.executing.add(task.clientOrderId);
     const isClash = task.isNonceClash ?? DEFAULT_NONCE_CLASH;
     try {
       return await this.attempt(task, isClash, false);
     } finally {
       this.inFlightCount--;
+      this.executing.delete(task.clientOrderId);
     }
   }
 

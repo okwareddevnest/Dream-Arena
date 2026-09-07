@@ -101,6 +101,11 @@ export interface SdkClient {
     expireTimestampNs: bigint; nonce: number;
   }): Promise<SdkTxResult>;
   cancelOrder(args: { marketId: string; orderId: string; nonce: number }): Promise<SdkTxResult>;
+  /** Reclaim escrow from orders the pool considers EXPIRED. A normal cancel on
+   *  one reverts with `IncorrectSender(caller, 0x0)` — the pool has no owner for
+   *  it any more — and the collateral stays locked until this is called.
+   *  Optional so a stub transport need not implement it. */
+  cancelExpiredOrders?(args: { marketId: string; orderIds: string[] }): Promise<SdkTxResult>;
   openOrders(args: { venueId?: string }): Promise<{ orderId: string; marketId: string; clientTag?: string }[]>;
   outcomeBalances(marketId: string): Promise<{ yes: number; no: number }>;
   collateralBalance(): Promise<number>;
@@ -161,6 +166,9 @@ const INDEXER_STATUS: Record<string, MarketStatus> = {
 };
 
 /** T-S1 C4: strike carries two implied decimals; `0` means reference mode. */
+/** The pool's way of saying "that order is expired": it has no owner any more. */
+const EXPIRED_ORDER = /IncorrectSender\([^,]+,\s*0x0+\)/i;
+
 export const STRIKE_SCALE = 100;
 export function decodeStrike(raw: string | number | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;
@@ -225,6 +233,11 @@ export class DreamDEXVenue implements Venue {
   private readonly seenOrders = new Map<string, OrderAck>();
   /** clientOrderId -> venue orderId, so `cancel` can address it. */
   private readonly venueOrderIds = new Map<string, string>();
+  /** clientOrderId → marketId for orders WE placed and have not cancelled.
+   *  cancelAll needs this: `openOrders()` reads the indexer, which lags the
+   *  chain and returns [] right after a write — so on shutdown the agent
+   *  reported "cancelled 0" while its own collateral sat locked in live orders. */
+  private readonly ownOrderMarkets = new Map<string, string>();
   private fillCbs: ((f: Fill) => void)[] = [];
   private connected = false;
   private lastErrorMs: Ms | null = null;
@@ -519,7 +532,10 @@ export class DreamDEXVenue implements Venue {
         reason: null,
         tsMs: this.nowFn(),
       };
-      if (res.orderId) this.venueOrderIds.set(order.clientOrderId, res.orderId);
+      if (res.orderId) {
+        this.venueOrderIds.set(order.clientOrderId, res.orderId);
+        this.ownOrderMarkets.set(order.clientOrderId, order.marketId);
+      }
       this.seenOrders.set(order.clientOrderId, ack);
       return ack;
     } catch (e) {
@@ -551,6 +567,7 @@ export class DreamDEXVenue implements Venue {
         : await this.c.cancelOrder({ marketId: marketId ?? '', orderId, nonce: await this.fallbackNonce() });
       assertTxOk(res, `cancel ${clientOrderId}`);
       this.venueOrderIds.delete(clientOrderId);
+      this.ownOrderMarkets.delete(clientOrderId);
       return { clientOrderId, status: 'CANCELLED', txHash: res.hash ?? null, tsMs: now };
     } catch (e) {
       this.note(e);
@@ -561,26 +578,80 @@ export class DreamDEXVenue implements Venue {
 
   async cancelAll(agent?: AgentId): Promise<CancelAck[]> {
     if (agent !== undefined && agent !== this.agent) return [];
-    let open: { orderId: string; marketId: string; clientTag?: string }[];
+    // Start from OUR OWN records — orders this process placed and has not
+    // cancelled. These are chain truth (we hold the receipts) and, unlike the
+    // indexer, are available immediately after a write.
+    const targets = new Map<string, { orderId: string; marketId: string; clientTag?: string }>();
+    for (const [clientOrderId, orderId] of this.venueOrderIds) {
+      targets.set(orderId, { orderId, marketId: this.ownOrderMarkets.get(clientOrderId) ?? '', clientTag: clientOrderId });
+    }
+    // Then union the indexer's view, which may know about orders from an
+    // earlier run of this same key. Keyed by orderId so nothing cancels twice.
     try {
-      open = await this.gate.run(() => this.c.openOrders({ venueId: this.venueId }));
+      for (const o of await this.gate.run(() => this.c.openOrders({ venueId: this.venueId }))) {
+        if (!targets.has(o.orderId)) targets.set(o.orderId, o);
+      }
     } catch (e) {
-      this.note(e);
-      return [];
+      this.note(e);   // a blind indexer must not stop us cancelling our own
     }
     const out: CancelAck[] = [];
-    for (const o of open) {
+    const expired = new Map<string, { orderId: string; clientOrderId: string }[]>();
+    for (const o of targets.values()) {
       const clientOrderId = o.clientTag ?? o.orderId;
       try {
         const res = await this.c.cancelOrder({ marketId: o.marketId, orderId: o.orderId, nonce: await this.fallbackNonce() });
         assertTxOk(res, `cancelAll ${o.orderId}`);
+        // Forget EVERY record pointing at this venue orderId, not just the one
+        // we cancelled under: the orderId identifies the order, so any other
+        // clientOrderId still mapped to it is stale. Clearing one leaves a
+        // straggler that the next cancelAll would try to cancel again.
+        for (const [cid, oid] of [...this.venueOrderIds]) {
+          if (oid === o.orderId) { this.venueOrderIds.delete(cid); this.ownOrderMarkets.delete(cid); }
+        }
         this.venueOrderIds.delete(clientOrderId);
+        this.ownOrderMarkets.delete(clientOrderId);
         out.push({ clientOrderId, status: 'CANCELLED', txHash: res.hash ?? null, tsMs: this.nowFn() });
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        dbg(`cancelAll FAILED ${o.orderId}: ${msg}`);
+        this.note(e);
+        // An expired order cannot be cancelled, but its escrow is still locked.
+        // Collect it and reclaim below rather than walking away from the money.
+        if (EXPIRED_ORDER.test(msg)) {
+          const byMarket = expired.get(o.marketId) ?? [];
+          byMarket.push({ orderId: o.orderId, clientOrderId });
+          expired.set(o.marketId, byMarket);
+        }
+      }
+    }
+    await this.reclaimExpired(expired, out);
+    return out;
+  }
+
+  /**
+   * Reclaim escrow from orders the pool reports as expired. Reported as
+   * NOT_FOUND, which is the truth: the order was gone; what we recovered was
+   * the collateral behind it.
+   */
+  private async reclaimExpired(
+    expired: Map<string, { orderId: string; clientOrderId: string }[]>,
+    out: CancelAck[],
+  ): Promise<void> {
+    if (!expired.size || !this.c.cancelExpiredOrders) return;
+    for (const [marketId, items] of expired) {
+      try {
+        const res = await this.c.cancelExpiredOrders({ marketId, orderIds: items.map((i) => i.orderId) });
+        assertTxOk(res, `cancelExpiredOrders ${marketId}`);
+        for (const it of items) {
+          this.venueOrderIds.delete(it.clientOrderId);
+          this.ownOrderMarkets.delete(it.clientOrderId);
+          out.push({ clientOrderId: it.clientOrderId, status: 'NOT_FOUND', txHash: res.hash ?? null, tsMs: this.nowFn() });
+        }
+      } catch (e) {
+        dbg(`reclaimExpired FAILED ${marketId}: ${e instanceof Error ? e.message : String(e)}`);
         this.note(e);
       }
     }
-    return out;
   }
 
   onFill(cb: (f: Fill) => void): () => void {

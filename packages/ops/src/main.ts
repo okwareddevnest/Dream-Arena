@@ -6,7 +6,7 @@
 import { loadConfig, SystemClock, VirtualClock, type Market, type Usd } from '@arena/shared';
 import { EventBus, Journal, Ingester, Store, binanceSource } from '@arena/data';
 import { Engine } from '@arena/core';
-import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource } from '@arena/venue';
+import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource, Reconciler } from '@arena/venue';
 
 const cfg = loadConfig();
 const clock = new SystemClock();
@@ -84,13 +84,42 @@ log(`bankroll ${bankroll.toFixed(2)} USD`);
 
 const engine = new Engine({
   agent: 'MIRA', venue, bus, clock, risk: cfg.risk, vol: cfg.vol,
-  submitter: queue,
+  // NOT `submitter: queue`. DreamDEXVenue already routes every write through
+  // this exact TxQueue (T-033), so handing the Engine the same queue made each
+  // order submit itself twice: the outer task's `run` called venue.placeOrder,
+  // which re-submitted the SAME clientOrderId and got the outer task's own
+  // pending promise back. Every order then deadlocked for 30s and no
+  // transaction was ever signed. One write, one queue.
   balance: () => bankroll,
   marketsCacheMs: cfg.throttle.marketsCacheMs,
   quoteCacheMs: cfg.throttle.quoteCacheMs,
   onJournal: (kind, payload) => { journal.append(kind, payload); },
 });
 venue.onFill((f) => { engine.onFill(f); journal.append('fill', f); });
+
+// ── Position reconciliation (chain wins) ────────────────────────────────────
+// WITHOUT THIS THE RISK CAPS ARE INERT. The engine only learns its net position
+// from onFill, and nothing on DreamDEXVenue emits fills yet — so
+// maxNetContractsPerMarket was never enforced and MIRA accumulated 250 contracts
+// against a cap of 50, holding real positions it did not know about.
+// The reconciler reads the chain and pushes the truth into the engine.
+const known = new Map<string, import('@arena/shared').Position>();
+const reconciler = new Reconciler({
+  venue, agent: 'MIRA',
+  local: {
+    positions: () => [...known.values()],
+    adopt: (p) => { known.set(p.marketId, p); engine.adoptNet(p.marketId, p.netContracts); },
+    drop: (marketId) => { known.delete(marketId); engine.dropNet(marketId); },
+  },
+  bus,
+  onReport: (r) => { journal.append('reconcile', r); },
+  onError: (e) => log(`RECONCILE ERROR ${e.message}`),
+});
+const stopReconciler = reconciler.start(
+  cfg.throttle.reconcilePollMs,
+  (fn, ms) => setInterval(fn, ms) as unknown as number,
+  (h) => clearInterval(h),
+);
 
 // ── Ingester ────────────────────────────────────────────────────────────────
 // Binance spot is the reference underlying feed. It is NOT a simulation — these
@@ -129,6 +158,7 @@ const shutdown = async (why: string) => {
   clearInterval(beat);
   log(`shutting down (${why})`);
   try { ingester.stop(); } catch { /* already stopped */ }
+  try { stopReconciler(); } catch { /* already stopped */ }
   // Cancel resting orders before letting go of the key — an abandoned order is
   // a real position on a real chain.
   try { const acks = await venue.cancelAll('MIRA'); log(`cancelled ${acks.length} resting order(s)`); }
