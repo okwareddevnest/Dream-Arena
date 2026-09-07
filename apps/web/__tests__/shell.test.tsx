@@ -3,9 +3,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join, extname } from 'node:path';
-import ArenaPage from '../app/page';
+import ArenaPage from '../app/arena/page';
 import { PALETTE, cssVars, THEME_TOKENS } from '../lib/theme';
 
 const web = resolve(import.meta.dirname, '..');
@@ -39,18 +39,25 @@ describe('T-050 arena shell', () => {
     render(<ArenaPage />);
     // The brand and the three F-A1 regions exist as labelled landmarks…
     expect(screen.getByRole('main', { name: /arena/i })).toBeTruthy();
-    for (const region of ['divergence', 'tape', 'standings']) {
+    // Landmark names track the visible headings (an aria-label that disagrees
+    // with its heading is an accessibility anti-pattern), so they are asserted
+    // by the copy the page actually shows.
+    for (const region of ['what mira believes', 'trades', 'forecasters', 'agent', 'holdings', 'markets']) {
       expect(screen.getByRole('region', { name: new RegExp(region, 'i') }), region).toBeTruthy();
     }
   });
 
-  it('shows an honest awaiting-feed state rather than placeholder numbers', () => {
+  // AMENDED at T-052/53/54. The original required the literal word "awaiting" in
+  // every empty region. The rule that matters is that an empty region NEVER
+  // fabricates a number; the wording is now specific to each panel, because an
+  // empty screen should say what to expect rather than repeat one stock phrase.
+  it('shows an honest empty state rather than placeholder numbers', () => {
     render(<ArenaPage />);
-    // No digit may appear in a data region until a real feed supplies one (T-051+).
-    for (const name of ['divergence', 'tape', 'standings']) {
+    for (const name of ['what mira believes', 'trades', 'forecasters']) {
       const region = screen.getByRole('region', { name: new RegExp(name, 'i') });
-      expect(region.textContent ?? '', `${name} must not fabricate values`).not.toMatch(/\d/);
-      expect(region.textContent ?? '', `${name} states it is awaiting data`).toMatch(/awaiting/i);
+      const text = region.textContent ?? '';
+      expect(text, `${name} must not fabricate values`).not.toMatch(/\d/);
+      expect(text.trim().length, `${name} explains itself`).toBeGreaterThan(10);
     }
   });
 
@@ -84,6 +91,10 @@ describe('T-050 arena shell', () => {
   });
 
   it('next build exits 0', () => {
+    // Build from a clean slate. A stale .next left by a dev server or a manual
+    // build makes this fail on a missing route module (observed: "Cannot find
+    // module for page: /icon.svg"), which says nothing about the code under test.
+    rmSync(resolve(web, '.next'), { recursive: true, force: true });
     execFileSync('npx', ['next', 'build'], { cwd: web, stdio: 'pipe', timeout: 300_000 });
   });
 });

@@ -5,32 +5,37 @@
 
 /** Broadcast palette: a near-black ground so live numbers and the gauge carry the screen. */
 export const PALETTE = {
-  /** page ground — the studio floor */
-  bg: '#07090c',
+  /** page ground — a deep blue-black, not a neutral one: the cool cast makes the
+   *  green/red of a position read as colour rather than as noise on grey */
+  bg: '#06080b',
   /** panel ground */
-  surface: '#0e1319',
+  surface: '#0b0f14',
   /** raised panel / hovered row */
-  raised: '#151c24',
-  /** hairline borders and grid rules */
-  line: '#1f2933',
+  raised: '#121820',
+  /** hairline borders — structure comes from these, not from shadows */
+  line: '#1b232d',
+  /** chart gridlines: present enough to read a value against, quiet enough to
+   *  never compete with the series */
+  grid: '#141c25',
   /** primary text */
-  ink: '#e6edf3',
+  ink: '#e8eef4',
   /** secondary text — labels, units */
-  'ink-muted': '#8b98a5',
+  'ink-muted': '#93a1b0',
   /** tertiary text — timestamps, disabled */
-  'ink-faint': '#55606b',
-  /** MIRA's identity colour; also the model curve */
-  accent: '#38bdf8',
+  'ink-faint': '#5b6875',
+  /** MIRA's identity, and the divergence span. The only saturated thing on the
+   *  arena, so a large edge is visible from across a room. */
+  accent: '#4cc9f0',
   /** long / YES / profit */
-  long: '#22c55e',
+  long: '#2ee6a8',
   /** short / NO / loss */
-  short: '#f43f5e',
+  short: '#ff5d7a',
   /** caution — stale feed, degraded health */
-  warn: '#fbbf24',
+  warn: '#ffc857',
   /** LIVE badge (real venue, real money-at-risk) */
-  live: '#22c55e',
+  live: '#2ee6a8',
   /** SIM badge (test rig only — never the demo path) */
-  sim: '#fbbf24',
+  sim: '#ffc857',
 } as const;
 
 export type ThemeToken = keyof typeof PALETTE;
