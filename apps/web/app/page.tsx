@@ -85,6 +85,7 @@ export default function LaunchPage() {
         <nav className="flex items-center gap-7 text-base">
           <a href="#how" className="hidden text-ink-muted hover:text-ink sm:inline">How it works</a>
           <a href="#verify" className="hidden text-ink-muted hover:text-ink sm:inline">Verify</a>
+          <Link href="/mira" className="hidden text-ink-muted hover:text-ink sm:inline">The agent</Link>
           <Link href="/arena" className="border border-accent rounded px-4 py-2 text-accent hover:bg-accent hover:text-bg">
             Open the arena
           </Link>

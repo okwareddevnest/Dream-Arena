@@ -185,7 +185,26 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
 
   const port = cfg.serve.apiPort;
   await new Promise<void>((resolve, reject) => {
-    http.once('error', reject);
+    // The WebSocketServer is attached to this http server and RE-EMITS its
+    // listen errors on itself, so a handler on `http` alone misses EADDRINUSE
+    // and node kills the process with an unhandled 'error' event.
+    const onError = (e: NodeJS.ErrnoException) => {
+      // A port clash is the commonest way to start a SECOND agent by accident,
+      // and a raw stack trace hides it. Worse, the old process keeps answering,
+      // so /api/health reports the stale agent's mode and everything looks fine.
+      if (e.code === 'EADDRINUSE') {
+        reject(new Error(
+          `Port ${port} is already in use — an arena agent is probably still running.\n` +
+          `  Check:  lsof -ti:${port}\n` +
+          `  Stop it: lsof -ti:${port} | xargs kill\n` +
+          `  Or run this one on another port: API_PORT=8081 npm run agent`,
+        ));
+        return;
+      }
+      reject(e);
+    };
+    http.once('error', onError);
+    wss.once('error', onError);
     http.listen(port, () => resolve());
   });
   log(`api on :${port} · ws ://:${port}/ws · cors ${cfg.serve.webOrigin}`);

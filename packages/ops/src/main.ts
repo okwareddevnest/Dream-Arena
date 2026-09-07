@@ -19,7 +19,20 @@ store.subscribe(bus);
 const log = (s: string) => console.log(`${new Date().toISOString()} ${s}`);
 const fail = (s: string): never => { console.error(`\n  ✗ ${s}\n`); process.exit(1); };
 
-log(`run ${cfg.runId} · mode ${cfg.venueMode}`);
+// Say the mode LOUDLY. A run that is quietly SIM when the operator expected LIVE
+// looks identical on every screen until someone checks a transaction — and the
+// arena badge will faithfully report SIM while everyone assumes otherwise.
+if (cfg.venueMode === 'LIVE') {
+  log(`run ${cfg.runId}`);
+  console.log('\n  \x1b[32m● LIVE\x1b[0m — Somnia testnet, real orders, real collateral.\n');
+} else {
+  log(`run ${cfg.runId}`);
+  console.log(
+    '\n  \x1b[33m● SIM\x1b[0m — SimulatedVenue. Nothing here touches the chain.\n' +
+    '    RFC-003 makes LIVE the demo path. Set VENUE_MODE=LIVE in .env,\n' +
+    '    or run: VENUE_MODE=LIVE npm run agent\n',
+  );
+}
 
 // ── Venue ───────────────────────────────────────────────────────────────────
 let venue: DreamDEXVenue | SimulatedVenue;
@@ -150,7 +163,7 @@ const server = await startArenaServer({
   journalForecast: (f) => { journal.append('forecast', f); },
   onSettle: (st) => journal.append('settlement', st),
   log,
-});
+}).catch((e: Error) => fail(e.message));
 
 // ── Maker-side fills ────────────────────────────────────────────────────────
 // Fills WE cause come back in the placeOrder result. A fill where someone hits a

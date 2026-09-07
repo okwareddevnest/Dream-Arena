@@ -51,9 +51,10 @@ export default function ArenaPage() {
             <Logo className="h-6 w-6 text-accent" />
             <Wordmark className="text-lg" />
           </Link>
-          <span className="hidden text-sm text-ink-faint sm:inline">
-            Somnia testnet · chain 50312
-          </span>
+          <nav className="hidden items-center gap-5 text-base sm:flex">
+            <Link href="/mira" className="text-ink-muted hover:text-ink">How it works</Link>
+            <Link href="/console" className="text-ink-muted hover:text-ink">Console</Link>
+          </nav>
         </div>
         <div className="flex items-center gap-4">
           <ConnectionDot connected={state.connected} stale={staleness.stale} ageMs={staleness.ageMs} />
