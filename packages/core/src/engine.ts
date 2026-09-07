@@ -211,7 +211,12 @@ export class Engine {
       case 'SKIP': this.stats.skips++; return;
       case 'HOLD': this.stats.holds++; return;
       case 'STAND_DOWN': this.stats.standDowns++; return;
-      case 'ENTER': break;
+      // Counted here, at the decision — not at submission. An ENTER that is
+      // later vetoed by the risk guard or sized to zero is still an enter the
+      // model wanted, and the gap between `enters` and `ordersPlaced` is
+      // exactly how much the guard is holding back. Previously this counter was
+      // declared, initialised and never incremented, so it always read 0.
+      case 'ENTER': this.stats.enters++; break;
     }
     if (signal.side === null) return;
 

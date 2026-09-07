@@ -6,7 +6,7 @@
 import { loadConfig, SystemClock, VirtualClock, type Market, type Usd } from '@arena/shared';
 import { EventBus, Journal, Ingester, Store, binanceSource } from '@arena/data';
 import { Engine } from '@arena/core';
-import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource, Reconciler } from '@arena/venue';
+import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource, Reconciler, ClaimLoop } from '@arena/venue';
 
 const cfg = loadConfig();
 const clock = new SystemClock();
@@ -121,6 +121,33 @@ const stopReconciler = reconciler.start(
   (h) => clearInterval(h),
 );
 
+// ── Maker-side fills ────────────────────────────────────────────────────────
+// Fills WE cause come back in the placeOrder result. A fill where someone hits a
+// quote we are resting exists only on the chain's live tail — which is exactly
+// what happens once ECHO is quoting against MIRA.
+// SimulatedVenue matches inline and emits its own fills, so it has no tail.
+const tail = venue instanceof DreamDEXVenue ? venue : null;
+const makerFillTimer = setInterval(() => {
+  void tail?.pollMakerFills().then((n: number) => { if (n) log(`maker fills: ${n}`); });
+}, cfg.throttle.reconcilePollMs);
+const stopMakerFills = () => clearInterval(makerFillTimer);
+
+// ── Claim loop (RFC-001 A5: winnings are CLAIMED, not received) ─────────────
+// Without this, every market MIRA wins settles and the payout simply stays on
+// the contract. Built as T-036 and, until now, never started.
+const claims = new ClaimLoop({
+  venue, bus,
+  onClaim: (r) => {
+    journal.append('claim', r);
+    if (r.claimed) log(`CLAIMED ${r.amountUsd.toFixed(2)} USD from ${r.marketId.slice(-6)} ${r.txHash ?? ''}`);
+  },
+  onError: (e) => log(`CLAIM ERROR ${e.message}`),
+});
+// ClaimLoop is caller-driven by design (`due()` + `sweep()`), so the timer lives
+// here. `sweep()` never throws — a claim failure must not stall trading.
+const claimTimer = setInterval(() => { void claims.sweep(); }, cfg.throttle.reconcilePollMs * 5);
+const stopClaims = () => clearInterval(claimTimer);
+
 // ── Ingester ────────────────────────────────────────────────────────────────
 // Binance spot is the reference underlying feed. It is NOT a simulation — these
 // are real prices; they are simply not sourced from the venue. Logged by the
@@ -147,7 +174,8 @@ const beat = setInterval(() => {
   const s = engine.statsSnapshot();
   log(`ticks ${s.ticks} val ${s.valuations} skip ${s.skips} enter ${s.enters} ` +
       `orders ${s.ordersPlaced} err ${s.orderErrors}/${s.quoteErrors} ` +
-      `bankroll ${bankroll.toFixed(2)}${engine.riskGuard.killed ? ' KILLED' : ''}`);
+      `bankroll ${bankroll.toFixed(2)} claimed ${claims.statsSnapshot().claimed}` +
+      `${engine.riskGuard.killed ? ' KILLED' : ''}`);
 }, 10_000);
 
 // ── Shutdown ────────────────────────────────────────────────────────────────
@@ -159,6 +187,8 @@ const shutdown = async (why: string) => {
   log(`shutting down (${why})`);
   try { ingester.stop(); } catch { /* already stopped */ }
   try { stopReconciler(); } catch { /* already stopped */ }
+  try { stopClaims(); } catch { /* already stopped */ }
+  try { stopMakerFills(); } catch { /* already stopped */ }
   // Cancel resting orders before letting go of the key — an abandoned order is
   // a real position on a real chain.
   try { const acks = await venue.cancelAll('MIRA'); log(`cancelled ${acks.length} resting order(s)`); }

@@ -4,7 +4,7 @@
 // spec: 20-INTERFACES §6 · T-034 · RFC-003 · docs/submission/sdk-feedback.md
 import { createPublicClient, http, parseAbi, getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import type { SdkClient, SdkMarketRow, SdkOnchainMarket, SdkOrderBook, SdkTxResult } from './dreamdex.ts';
+import type { SdkClient, SdkLiveFill, SdkMarketRow, SdkOnchainMarket, SdkOrderBook, SdkTxResult } from './dreamdex.ts';
 
 /** Collateral and outcome sizes are 6dp on testnet (verified on-chain). */
 export const RAW_DECIMALS = 6;
@@ -126,6 +126,8 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
     transport: http(rpcUrl, { timeout: 8_000, retryCount: 2, retryDelay: 250 }),
   });
 
+  /** Pools with an active live-tail watch (needed before getLiveUserFills). */
+  const watched = new Set<string>();
   /** marketId → its row, so a symbol can reach a pool without re-querying. */
   const rowCache = new Map<string, SdkMarketRow>();
   const remember = (rows: SdkMarketRow[]) => {
@@ -202,7 +204,12 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
       if (process.env.DEBUG_TX) {
         console.log(`${new Date().toISOString()} SDK place result hash=${res.hash} orderId=${res.orderId} keys=${Object.keys(res ?? {}).join(',')}`);
       }
-      return { hash: res.hash, receipt: res.receipt, orderId: res.orderId != null ? String(res.orderId) : undefined };
+      // Pass the matches through: this is the venue's fill source (no indexer lag).
+      return {
+        hash: res.hash, receipt: res.receipt,
+        orderId: res.orderId != null ? String(res.orderId) : undefined,
+        fills: (res.fills ?? []).map((f: any) => ({ quantityFilled: f.quantityFilled, fillPrice: f.fillPrice })),
+      };
     },
 
     async cancelOrder(args): Promise<SdkTxResult> {
@@ -211,6 +218,41 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
         pool: await poolFor(args.marketId), orderId: args.orderId,
       });
       return { hash: res.hash, receipt: res.receipt };
+    },
+
+    async liveUserFills(args): Promise<SdkLiveFill[]> {
+      if (!owner) return [];
+      // The live tail only reports markets under an active watch, so subscribe
+      // to each pool once. Ref-counted by the SDK; we never unsubscribe because
+      // the process holds the venue for its whole life.
+      const out: SdkLiveFill[] = [];
+      for (const marketId of args.marketIds) {
+        let pool: string;
+        try { pool = await poolFor(marketId); } catch { continue; }
+        if (!watched.has(pool)) {
+          try { await ex.watchMarket(pool); watched.add(pool); }
+          catch { continue; }        // a pool we cannot watch simply yields nothing
+        }
+        let rows: any[];
+        try { rows = ex.client.getLiveUserFills(pool, owner, { limit: args.limit ?? 50 }) ?? []; }
+        catch { continue; }
+        for (const r of rows) {
+          // Our side: if we were the maker, ours is makerSide; else takerSide.
+          const mine = String(r.maker ?? '').toLowerCase() === owner.toLowerCase()
+            ? r.makerSide : r.takerSide;
+          if (!mine) continue;                       // unresolved join — skip, do not guess
+          out.push({
+            id: String(r.id),
+            marketId: String(r.market_id ?? marketId),
+            fillPrice: String(r.fillPrice),
+            quantity: String(r.quantity),
+            side: String(mine).includes('NO') ? 'NO' : 'YES',
+            txHash: r.txHash ?? null,
+            tsMs: r.timestamp ? Number(r.timestamp) * 1000 : undefined,
+          });
+        }
+      }
+      return out;
     },
 
     async cancelExpiredOrders(args): Promise<SdkTxResult> {

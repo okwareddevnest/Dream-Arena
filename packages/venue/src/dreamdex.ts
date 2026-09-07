@@ -87,6 +87,23 @@ export interface SdkTxResult {
   receipt?: { status?: string };
   info?: { receipt?: { status?: string } };
   orderId?: string;
+  /** Matches executed by THIS order, returned synchronously by the SDK. This is
+   *  the fill source: it needs no indexer (which lags) and no socket. MIRA's
+   *  LIMIT orders cross the book, so most fills arrive here immediately. */
+  fills?: { quantityFilled: bigint | string; fillPrice: bigint | string; id?: string }[];
+}
+
+/** A fill from the chain's live tail — how a MAKER-side match is learned. */
+export interface SdkLiveFill {
+  /** `${blockNumber}_${logIndex}` — stable chain id, used to dedupe. */
+  id: string;
+  marketId: string;
+  /** Raw 6dp. */
+  fillPrice: string | bigint;
+  quantity: string | bigint;
+  side: Side;
+  txHash?: string | null;
+  tsMs?: Ms;
 }
 
 /** The slice of the SDK this adapter uses. Injected so it can be stubbed. */
@@ -106,6 +123,9 @@ export interface SdkClient {
    *  it any more — and the collateral stays locked until this is called.
    *  Optional so a stub transport need not implement it. */
   cancelExpiredOrders?(args: { marketId: string; orderIds: string[] }): Promise<SdkTxResult>;
+  /** Our fills from the chain's live tail, including ones we did not initiate.
+   *  Optional: a stub transport need not tail. */
+  liveUserFills?(args: { marketIds: string[]; limit?: number }): Promise<SdkLiveFill[]>;
   openOrders(args: { venueId?: string }): Promise<{ orderId: string; marketId: string; clientTag?: string }[]>;
   outcomeBalances(marketId: string): Promise<{ yes: number; no: number }>;
   collateralBalance(): Promise<number>;
@@ -238,6 +258,9 @@ export class DreamDEXVenue implements Venue {
    *  chain and returns [] right after a write — so on shutdown the agent
    *  reported "cancelled 0" while its own collateral sat locked in live orders. */
   private readonly ownOrderMarkets = new Map<string, string>();
+  /** Chain fill ids already published, so the taker and maker paths cannot
+   *  double-report the same trade. */
+  private readonly seenChainFills = new Set<string>();
   private fillCbs: ((f: Fill) => void)[] = [];
   private connected = false;
   private lastErrorMs: Ms | null = null;
@@ -536,6 +559,7 @@ export class DreamDEXVenue implements Venue {
         this.venueOrderIds.set(order.clientOrderId, res.orderId);
         this.ownOrderMarkets.set(order.clientOrderId, order.marketId);
       }
+      this.emitResultFills(order, res);
       this.seenOrders.set(order.clientOrderId, ack);
       return ack;
     } catch (e) {
@@ -666,6 +690,99 @@ export class DreamDEXVenue implements Venue {
   }
 
   /** Publish a fill observed from chain events. Called by the event subscriber. */
+  /**
+   * Publish the matches the SDK returned with a placeOrder. Without this the
+   * engine never learns it traded: `netByMarket` stays 0, so the risk caps
+   * (maxNetContractsPerMarket) are silently inert. Sizes and prices are raw
+   * 6dp integers; contracts and probabilities are what the rest of the system
+   * speaks.
+   */
+  private emitResultFills(order: Order, res: SdkTxResult): void {
+    const scale = 10 ** this.priceDecimals;
+    for (const f of res.fills ?? []) {
+      let qty: bigint, px: bigint;
+      try { qty = BigInt(f.quantityFilled); px = BigInt(f.fillPrice); }
+      catch { continue; }               // a malformed fill must not kill the ack
+      if (qty <= 0n) continue;          // never publish a phantom trade
+      if (f.id) {
+        if (this.seenChainFills.has(f.id)) continue;
+        this.rememberChainFill(f.id);
+      }
+      const sizeContracts = Number(qty) / scale;
+      const price = Number(px) / scale;
+      this.emitFill({
+        clientOrderId: order.clientOrderId,
+        venueOrderId: res.orderId ?? null,
+        marketId: order.marketId,
+        agent: this.agent,
+        side: order.side,
+        sizeContracts,
+        price: price as Prob,
+        feeUsd: (sizeContracts * price * this.feeBps) / 10_000,
+        txHash: res.hash ?? null,
+        tsMs: this.nowFn(),
+      });
+    }
+  }
+
+  /**
+   * Publish fills the chain saw that we did not initiate — i.e. someone hit a
+   * quote we were resting. The taker path (placeOrder's own result) cannot see
+   * these. Deduped against the taker path by the chain's own fill id, so one
+   * trade is one Fill however it was discovered. Never throws: a dead tail must
+   * not touch trading.
+   * @returns how many new fills were published.
+   */
+  async pollMakerFills(): Promise<number> {
+    if (!this.c.liveUserFills) return 0;
+    let rows: SdkLiveFill[];
+    try {
+      const markets = await this.getMarkets();
+      if (!markets.length) return 0;
+      rows = await this.c.liveUserFills({ marketIds: markets.map((m) => m.id), limit: 50 });
+    } catch (e) {
+      this.note(e);
+      return 0;
+    }
+    let n = 0;
+    const scale = 10 ** this.priceDecimals;
+    for (const r of rows ?? []) {
+      if (!r?.id || this.seenChainFills.has(r.id)) continue;
+      let qty: bigint, px: bigint;
+      try { qty = BigInt(r.quantity); px = BigInt(r.fillPrice); } catch { continue; }
+      if (qty <= 0n) continue;
+      this.rememberChainFill(r.id);
+      const sizeContracts = Number(qty) / scale;
+      const price = Number(px) / scale;
+      this.emitFill({
+        clientOrderId: `maker:${r.id}`,   // not ours to name; the chain id is the identity
+        venueOrderId: null,
+        marketId: r.marketId,
+        agent: this.agent,
+        side: r.side,
+        sizeContracts,
+        price: price as Prob,
+        feeUsd: (sizeContracts * price * this.feeBps) / 10_000,
+        txHash: r.txHash ?? null,
+        tsMs: r.tsMs ?? this.nowFn(),
+      });
+      n++;
+    }
+    return n;
+  }
+
+  /** Bounded memory: a long run must not accumulate fill ids for ever. */
+  private rememberChainFill(id: string): void {
+    this.seenChainFills.add(id);
+    if (this.seenChainFills.size > 2_000) {
+      // Sets iterate in insertion order, so this drops the oldest.
+      for (const old of this.seenChainFills) {
+        this.seenChainFills.delete(old);
+        if (this.seenChainFills.size <= 1_500) break;
+      }
+    }
+  }
+
   emitFill(f: Omit<Fill, 'fillId' | 'explorerUrl'> & { fillId?: string }): Fill {
     const fill: Fill = {
       ...f,
