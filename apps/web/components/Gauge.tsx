@@ -24,62 +24,102 @@ export function markPercent(p: number): number {
 
 const pct = (p: number) => `${(p * 100).toFixed(1)}`;
 
+/** Where a probability sits on the axis, as a percentage. */
+export function markPercent2(p: number): number { return markPercent(p); }
+
 export function Gauge({
   market, valuation, edgeIn,
 }: { market: GaugeMarket; valuation: GaugeValuation | null; edgeIn: number }) {
   const skipped = valuation?.skipReason != null;
   const state = valuation === null ? 'waiting' : skipped ? 'skipped'
     : Math.abs(valuation.edge) >= edgeIn ? 'diverged' : 'quiet';
+  const live = state === 'diverged' || state === 'quiet';
 
-  const model = valuation && !skipped ? markPercent(valuation.pModel) : null;
-  const market_ = valuation && !skipped ? markPercent(valuation.pMarket) : null;
-  const lo = model !== null && market_ !== null ? Math.min(model, market_) : 0;
-  const hi = model !== null && market_ !== null ? Math.max(model, market_) : 0;
+  const model = live ? markPercent(valuation!.pModel) : null;
+  const mkt = live ? markPercent(valuation!.pMarket) : null;
+  const lo = model !== null && mkt !== null ? Math.min(model, mkt) : 0;
+  const hi = model !== null && mkt !== null ? Math.max(model, mkt) : 0;
+  const modelAbove = (model ?? 0) >= (mkt ?? 0);
+  const edgePts = live ? Math.abs(valuation!.edge) * 100 : 0;
 
   return (
     <div
       data-testid="gauge-row"
       data-state={state}
-      className="group grid grid-cols-[11rem_1fr_6.5rem] items-center gap-5 border-b border-line py-3.5 last:border-b-0"
+      className={`group relative grid grid-cols-[12rem_1fr_8.5rem] items-center gap-6 rounded-lg border px-4 py-4 transition-colors ${
+        state === 'diverged'
+          ? 'border-accent/40 bg-accent/[0.06]'
+          : 'border-transparent hover:border-line'
+      }`}
     >
       {/* identity */}
       <div className="min-w-0">
         <div className="truncate text-base text-ink">{market.symbol}</div>
-        <div className="mt-0.5 text-sm text-ink-faint">{market.asset}</div>
+        <div className="mt-0.5 flex items-center gap-2 text-sm text-ink-faint">
+          <span>{market.asset}</span>
+          {state === 'diverged' ? (
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="ring absolute inline-flex h-full w-full rounded-full bg-accent" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+            </span>
+          ) : null}
+        </div>
       </div>
 
-      {/* the axis */}
-      <div data-testid="axis" className="relative h-9">
-        {/* 0 -> 1 rule, with a midpoint reference at even odds */}
-        <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-line" />
-        <div className="absolute left-1/2 top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 bg-line" />
+      {/* the instrument */}
+      <div data-testid="axis" className="relative h-14">
+        {/* face */}
+        <div className="absolute inset-y-3 inset-x-0 overflow-hidden rounded bg-raised">
+          {/* a slow pass, so a live instrument never looks frozen */}
+          {live ? <div className="sweep absolute inset-y-0 w-1/4 bg-accent/[0.05]" /> : null}
+        </div>
+        {/* decile ticks — something to read a value against */}
+        {live ? [10, 20, 30, 40, 50, 60, 70, 80, 90].map((t) => (
+          <span
+            key={t}
+            className={`absolute top-1/2 -translate-y-1/2 ${t === 50 ? 'h-5 w-px bg-line' : 'h-2 w-px bg-grid'}`}
+            style={{ left: `${t}%` }}
+          />
+        )) : null}
 
-        {state === 'diverged' || state === 'quiet' ? (
+        {live ? (
           <>
+            {/* the span: the edge, and the only saturated thing on the page */}
             <div
               data-testid="gap"
-              className={`absolute top-1/2 h-[3px] -translate-y-1/2 rounded-full ${
-                state === 'diverged' ? 'bg-accent' : 'bg-ink-faint'
+              className={`absolute top-1/2 -translate-y-1/2 rounded-full transition-all duration-500 ease-out ${
+                state === 'diverged' ? 'h-2.5 bg-accent shadow-[0_0_20px] shadow-accent/50' : 'h-1 bg-ink-faint'
               }`}
-              style={{ left: `${lo}%`, width: `${hi - lo}%` }}
+              style={{ left: `${lo}%`, width: `${Math.max(hi - lo, 0.4)}%` }}
             />
+            {/* market: where the book is */}
             <span
               data-testid="mark-market"
               title="market price"
-              className="absolute top-1/2 h-4 w-[2px] -translate-x-1/2 -translate-y-1/2 bg-ink-muted"
-              style={{ left: `${market_}%` }}
+              className="absolute top-1/2 h-7 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-ink-muted transition-all duration-500 ease-out"
+              style={{ left: `${mkt}%` }}
             />
+            {/* model: what MIRA believes — taller, and alive when it is tradeable */}
             <span
               data-testid="mark-model"
               title="MIRA's model"
-              className={`absolute top-1/2 h-6 w-[2px] -translate-x-1/2 -translate-y-1/2 ${
-                state === 'diverged' ? 'bg-accent' : 'bg-ink-muted'
+              className={`absolute top-1/2 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-500 ease-out ${
+                state === 'diverged' ? 'breathe h-11 bg-accent-hot' : 'h-8 bg-ink'
               }`}
               style={{ left: `${model}%` }}
             />
+            {/* how big the gap is, written on the gap */}
+            {state === 'diverged' ? (
+              <span
+                className="absolute -translate-x-1/2 font-mono text-xs tabular-nums text-accent-hot"
+                style={{ left: `${lo + (hi - lo) / 2}%`, top: '-0.1rem' }}
+              >
+                {modelAbove ? '+' : '−'}{edgePts.toFixed(1)}
+              </span>
+            ) : null}
           </>
         ) : (
-          <div className="absolute inset-y-0 left-0 flex items-center">
+          <div className="absolute inset-0 flex items-center">
             <span className="text-sm text-ink-faint">
               {state === 'skipped' ? valuation?.skipReason : 'Awaiting first tick'}
             </span>
@@ -88,16 +128,21 @@ export function Gauge({
       </div>
 
       {/* the numbers */}
-      <div className="text-right font-mono text-lg tabular-nums">
-        {state === 'diverged' || state === 'quiet' ? (
+      <div className="text-right font-mono tabular-nums">
+        {live ? (
           <>
-            <div data-testid="p-model" className={state === 'diverged' ? 'text-accent' : 'text-ink'}>
+            <div
+              data-testid="p-model"
+              className={`tabular-shift text-2xl ${state === 'diverged' ? 'text-accent-hot' : 'text-ink'}`}
+            >
               {pct(valuation!.pModel)}
             </div>
-            <div data-testid="p-market" className="text-ink-faint">{pct(valuation!.pMarket)}</div>
+            <div data-testid="p-market" className="tabular-shift text-base text-ink-faint">
+              {pct(valuation!.pMarket)} book
+            </div>
           </>
         ) : (
-          <div className="text-ink-faint">&mdash;</div>
+          <div className="text-base text-ink-faint">&mdash;</div>
         )}
       </div>
     </div>

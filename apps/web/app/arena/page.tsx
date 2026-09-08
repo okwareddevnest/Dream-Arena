@@ -25,6 +25,11 @@ import { connectWallet, type Wallet } from '../../lib/wallet';
 import { useArena } from '../../lib/useArena';
 import { useAgent } from '../../lib/useAgent';
 import { Card } from '../../components/Card';
+import { Voice } from '../../components/Voice';
+import { SpotChart } from '../../components/SpotChart';
+import { SkipReasons } from '../../components/SkipReasons';
+import { SessionStrip } from '../../components/SessionStrip';
+import { Scorecard, type ScoreData } from '../../components/Scorecard';
 
 const EDGE_IN = 0.06;
 
@@ -33,6 +38,24 @@ export default function ArenaPage() {
   const { stats, health, offsetMs } = useAgent();
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [score, setScore] = useState<ScoreData | null>(null);
+
+  // Your own record, polled while a wallet is connected. Nothing here is shared
+  // with anyone else: it is what YOU said and how it turned out.
+  useEffect(() => {
+    if (!wallet) { setScore(null); return; }
+    const base = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8080';
+    let alive = true;
+    const poll = () => {
+      fetch(`${base}/api/you/${wallet.address}`)
+        .then((r) => r.json())
+        .then((d) => { if (alive) setScore(d as ScoreData); })
+        .catch(() => { if (alive) setScore(null); });
+    };
+    poll();
+    const t = setInterval(poll, 8_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [wallet]);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(t);
@@ -74,6 +97,14 @@ export default function ArenaPage() {
           <Card title="Holdings">
             <Positions positions={state.positions as never} />
           </Card>
+          {Object.entries(state.spot).slice(0, 2).map(([sym, series]) => (
+            <Card key={sym} title={sym} note="underlying">
+              <SpotChart symbol={sym} series={series as never} />
+            </Card>
+          ))}
+          <Card title="Why it is waiting" note="refusals are information">
+            <SkipReasons valuations={state.valuations as never} />
+          </Card>
           <Card title="Markets" note="soonest first">
             <MarketRail markets={state.markets as never} nowMs={now} />
           </Card>
@@ -81,6 +112,18 @@ export default function ArenaPage() {
 
         {/* centre — the board, then the tape */}
         <div className="flex min-w-0 flex-col gap-4 px-4 py-4">
+          <Card title="This session" note="live counters">
+            <SessionStrip
+              stats={stats as never}
+              tape={state.tape}
+              positions={state.positions}
+            />
+          </Card>
+
+          <Card title="MIRA" note="thinking out loud">
+            <Voice quips={state.quips as never} />
+          </Card>
+
           <Card
             weight="feature"
             title="What MIRA believes, against what the market is pricing"
@@ -95,6 +138,10 @@ export default function ArenaPage() {
                 ))}
               </div>
             )}
+          </Card>
+
+          <Card title="Your record" note="how you are wrong, not just that you are">
+            <Scorecard data={score} />
           </Card>
 
           <Card title="Trades" note="every fill is verifiable on-chain">

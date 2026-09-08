@@ -12,7 +12,10 @@ import type {
   AppConfig, Bus, Clock, Forecast, Ms, Mode, Outcome, ScenarioName, Settlement, Venue,
 } from '@arena/shared';
 import type { Store } from '@arena/data';
-import { Broadcaster, RestRouter, HuntService, MirrorService, parseUrl, type Socket } from '@arena/api';
+import {
+  Broadcaster, RestRouter, HuntService, MirrorService, parseUrl,
+  userRecord, calibrationBuckets, headToHead, type Socket,
+} from '@arena/api';
 
 export interface ArenaServerOptions {
   cfg: AppConfig;
@@ -132,6 +135,28 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
     if (s) settlements.unshift(s);
   }
 
+  /**
+   * One person's record. This is the only genuinely per-user thing the arena can
+   * offer: MIRA's probability is identical for everyone, but what YOU said, and
+   * how it turned out, is yours alone.
+   */
+  function scorecardFor(addr: string): unknown {
+    const snap = snapshot();
+    const outcomes = (o.outcomes?.() ?? []) as never[];
+    const views = snap.valuations.map((v) => ({ marketId: v.marketId, pModel: v.pModel }));
+    const mine = forecasts.filter((f) => f.userAddr?.toLowerCase() === addr.toLowerCase());
+    return {
+      userAddr: addr,
+      record: userRecord(addr, forecasts, outcomes),
+      calibration: calibrationBuckets(mine, outcomes, 5),
+      versusMira: headToHead(addr, forecasts, views, outcomes),
+      forecasts: mine.length,
+      // Open calls have no score yet; saying so beats implying a zero.
+      pending: mine.filter((f) => !outcomes.some((x: { marketId: string; resolved: boolean }) =>
+        x.marketId === f.marketId && x.resolved)).length,
+    };
+  }
+
   // ── HTTP ──────────────────────────────────────────────────────────────────
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
@@ -142,6 +167,19 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
       // The router parses the body itself, so hand it the raw string.
       const url: string = req.url ?? '/';
       const { path, query } = parseUrl(url);
+
+      // Per-user scorecard. Added after IF §13 was frozen, so it lives beside the
+      // router rather than inside it — the frozen surface stays untouched.
+      const you = /^\/api\/you\/(0x[0-9a-fA-F]{40})$/.exec(path);
+      if (you) {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'access-control-allow-origin': cfg.serve.webOrigin,
+        });
+        res.end(JSON.stringify(scorecardFor(you[1]!)));
+        return;
+      }
+
       void router
         .handle({
           method: (req.method ?? 'GET').toUpperCase() as never,

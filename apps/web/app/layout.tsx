@@ -2,26 +2,32 @@
 // lib/theme.ts stays the only place a colour value is written. spec: PRD FR-U5.
 import type { ReactNode } from 'react';
 import type { Metadata } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Mono, Instrument_Serif } from 'next/font/google';
+import { Fraunces, Manrope, JetBrains_Mono } from 'next/font/google';
 import { cssVars } from '../lib/theme';
 import './globals.css';
 
 // Self-hosted at build time, so the demo never waits on a font CDN.
-// Plex is engineered rather than neutral — it reads as instrumentation, which is
-// what this is — and both faces ship true tabular figures, which the tape needs
-// so prices align digit for digit.
-const sans = IBM_Plex_Sans({
-  subsets: ['latin'], weight: ['400', '500'], display: 'swap', variable: '--font-sans',
-});
-const mono = IBM_Plex_Mono({
-  subsets: ['latin'], weight: ['400', '500'], display: 'swap', variable: '--font-mono',
-});
-// Display face, used ONLY on the launch page. The shift is deliberate: the
-// marketing surface speaks in an editorial voice, the arena speaks in
-// instrumentation. Two registers, one product.
-const display = Instrument_Serif({
-  subsets: ['latin'], weight: ['400'], style: ['normal', 'italic'],
+//
+// A deliberate change of voice. Fraunces is a variable serif with real
+// personality — its optical-size axis means the display cut is genuinely drawn
+// for large sizes rather than a body face scaled up, which is what gives the
+// headlines warmth instead of authority-by-default. Manrope carries the
+// interface: geometric, open, friendlier than a grotesque without being soft.
+// JetBrains Mono holds the numbers — true tabular figures, and enough character
+// that a column of prices looks designed rather than dumped.
+// Variable: `axes` and a fixed `weight` are mutually exclusive in next/font, and
+// the whole point of Fraunces here is the axes — SOFT rounds the terminals, WONK
+// enables the alternate shapes, and opsz means the display cut is genuinely
+// drawn for large sizes rather than a body face scaled up.
+const display = Fraunces({
+  subsets: ['latin'], axes: ['SOFT', 'WONK', 'opsz'],
   display: 'swap', variable: '--font-display',
+});
+const sans = Manrope({
+  subsets: ['latin'], weight: ['400', '500', '600'], display: 'swap', variable: '--font-sans',
+});
+const mono = JetBrains_Mono({
+  subsets: ['latin'], weight: ['400', '500'], display: 'swap', variable: '--font-mono',
 });
 
 export const metadata: Metadata = {

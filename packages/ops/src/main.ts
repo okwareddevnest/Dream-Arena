@@ -5,7 +5,7 @@
 // spec: ARCH §1,§2 · PRD §8 · RFC-003
 import { loadConfig, SystemClock, VirtualClock, type Market, type Usd } from '@arena/shared';
 import { EventBus, Journal, Ingester, Store, binanceSource } from '@arena/data';
-import { Engine } from '@arena/core';
+import { Engine, Persona } from '@arena/core';
 import { DreamDEXVenue, SimulatedVenue, TxQueue, NonceManager, createSdkClient, createBoundarySource, Reconciler, ClaimLoop } from '@arena/venue';
 import { startArenaServer } from './server.ts';
 
@@ -135,6 +135,24 @@ const stopReconciler = reconciler.start(
   (h) => clearInterval(h),
 );
 
+// ── MIRA's voice ────────────────────────────────────────────────────────────
+// F-A9 / FR-U4. Built as T-027 and, until now, never started — which is why the
+// arena read as a dashboard rather than as an agent you are watching. It runs
+// entirely off the bus in the commentary lane and is NEVER awaited by the
+// engine, so it cannot add a microsecond to a trading decision.
+const persona = new Persona({
+  bus, clock,
+  // The bus carries marketIds; a person hears a symbol.
+  symbolFor: (id) => store.snapshot(clock.now()).markets.find((m) => m.id === id)?.symbol ?? id.slice(0, 10),
+});
+const stopPersona = persona.subscribe(bus);
+bus.on('quip', (q) => { journal.append('quip', q); });
+// The engine's own moments: a fill large enough to be worth remarking on.
+venue.onFill((f) => {
+  const usd = f.sizeContracts * f.price;
+  if (usd >= 5) persona.say(f.side === 'YES' ? 'big_win' : 'big_loss', { pnlUsd: usd, marketSymbol: f.marketId });
+});
+
 // Markets reach the UI through Store.applyMarkets, not the bus: there is no
 // 'markets' bus topic and IF §13 is frozen. getMarkets is cached, so this is
 // cheap; without it the arena page has valuations for markets it cannot name.
@@ -234,6 +252,7 @@ const shutdown = async (why: string) => {
   try { stopClaims(); } catch { /* already stopped */ }
   try { stopMakerFills(); } catch { /* already stopped */ }
   try { clearInterval(marketsTimer); } catch { /* already stopped */ }
+  try { stopPersona(); } catch { /* already stopped */ }
   try { await server.stop(); } catch { /* already stopped */ }
   // Cancel resting orders before letting go of the key — an abandoned order is
   // a real position on a real chain.

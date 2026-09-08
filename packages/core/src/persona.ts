@@ -46,6 +46,9 @@ export interface PersonaOptions {
   cacheSize?: number;
   /** Hard cap on quip length, so the UI never has to truncate mid-word. */
   maxChars?: number;
+  /** Render a marketId as something a person would say. The bus carries ids, and
+   *  a 66-character hex in a human-facing line reads as a leaked internal. */
+  symbolFor?: (marketId: string) => string;
 }
 
 /**
@@ -120,7 +123,10 @@ export class Persona {
     produced: 0, fromCache: 0, fromGenerator: 0, generatorFailures: 0, refillsInFlight: 0,
   };
 
+  private readonly symbolFor: ((id: string) => string) | undefined;
+
   constructor(o: PersonaOptions) {
+    this.symbolFor = o.symbolFor;
     this.bus = o.bus;
     this.clock = o.clock;
     this.generator = o.generator;
@@ -234,8 +240,9 @@ export class Persona {
         }
       }),
       bus.on('signal', (s) => {
-        if (s.action === 'SKIP') this.say('skip', { marketSymbol: s.marketId });
-        if (s.action === 'STAND_DOWN') this.say('stand_down', { marketSymbol: s.marketId });
+        const symbol = this.symbolFor ? this.symbolFor(s.marketId) : s.marketId;
+        if (s.action === 'SKIP') this.say('skip', { marketSymbol: symbol });
+        if (s.action === 'STAND_DOWN') this.say('stand_down', { marketSymbol: symbol });
       }),
     ];
     return () => { for (const off of offs) off(); };

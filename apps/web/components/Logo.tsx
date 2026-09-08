@@ -17,17 +17,16 @@ export function Logo({ className = '', title = 'Dream Arena' }: { className?: st
       aria-label={title}
       className={className}
       fill="none"
-      // The axis is a hairline; the span is the weight. Reads at 16px.
-      strokeLinecap="square"
+      strokeLinecap="round"
     >
-      {/* the probability axis, 0 → 1 */}
-      <line data-part="axis" x1="4" y1="16" x2="28" y2="16" stroke="currentColor" strokeWidth="1" opacity="0.35" />
-      {/* the span between belief and price — the edge */}
-      <line data-part="span" x1="11" y1="16" x2="22" y2="16" stroke="currentColor" strokeWidth="3" />
+      {/* the probability axis, 0 -> 1 */}
+      <line data-part="axis" x1="3" y1="16" x2="29" y2="16" stroke="currentColor" strokeWidth="1.5" opacity="0.28" />
+      {/* the span between belief and price — the edge, and the weight of the mark */}
+      <line data-part="span" x1="10" y1="16" x2="22" y2="16" stroke="currentColor" strokeWidth="6" />
       {/* market: where the book is */}
-      <line data-part="market" x1="11" y1="9" x2="11" y2="23" stroke="currentColor" strokeWidth="2" opacity="0.55" />
+      <line data-part="market" x1="10" y1="7" x2="10" y2="25" stroke="currentColor" strokeWidth="3" opacity="0.5" />
       {/* model: where MIRA thinks it should be */}
-      <line data-part="model" x1="22" y1="6" x2="22" y2="26" stroke="currentColor" strokeWidth="2" />
+      <line data-part="model" x1="22" y1="3" x2="22" y2="29" stroke="currentColor" strokeWidth="3.5" />
     </svg>
   );
 }

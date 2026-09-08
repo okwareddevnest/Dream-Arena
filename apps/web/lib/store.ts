@@ -12,6 +12,8 @@ export const STALE_WARN_MS = 5_000;
 /** Tape is bounded: a broadcast page runs for hours. */
 export const TAPE_CAP = 200;
 const CURVE_CAP = 600;
+/** Spot readings kept per symbol — a window, not a database. */
+const SPOT_CAP = 180;
 
 export interface ArenaState {
   runId: string | null;
@@ -28,6 +30,10 @@ export interface ArenaState {
   health: any | null;
   quips: any[];
   model: any | null;
+  /** Spot readings accumulated from the live tick stream. There is no history
+   *  endpoint, so a fresh page starts empty — which is the truth, and the chart
+   *  says so rather than drawing one reading as a trend. */
+  spot: Record<string, { tsMs: number; price: number }[]>;
   /** When the server last told us anything. */
   lastEventMs: number | null;
 }
@@ -35,7 +41,7 @@ export interface ArenaState {
 const empty = (): ArenaState => ({
   runId: null, mode: null, hydrated: false, connected: false,
   markets: [], valuations: [], positions: [], tape: [], pnlCurve: [],
-  round: null, leaderboard: [], health: null, quips: [], model: null,
+  round: null, leaderboard: [], health: null, quips: [], model: null, spot: {},
   lastEventMs: null,
 });
 
@@ -68,7 +74,17 @@ export function createArenaStore(): ArenaStore {
     if (typeof topic !== 'string' || d === undefined || d === null) return false;
     switch (topic) {
       case 'fill': state = { ...state, tape: prepend(state.tape, d, TAPE_CAP) }; return true;
-      case 'tick': state = { ...state, model: { ...(state.model ?? {}), spot: d.price, tsMs: d.tsMs } }; return true;
+      case 'tick': {
+        const sym = String(d.symbol ?? '');
+        const prev = state.spot[sym] ?? [];
+        const next = [...prev, { tsMs: d.tsMs, price: d.price }].slice(-SPOT_CAP);
+        state = {
+          ...state,
+          model: { ...(state.model ?? {}), spot: d.price, tsMs: d.tsMs },
+          spot: { ...state.spot, [sym]: next },
+        };
+        return true;
+      }
       case 'model': state = { ...state, model: d }; return true;
       case 'valuation': {
         const rest = state.valuations.filter((v) => v.marketId !== d.marketId);
@@ -121,6 +137,8 @@ export function createArenaStore(): ArenaStore {
             health: d.health ?? null,
             quips: d.quips ?? [],
             model: d.model ?? null,
+            // A snapshot carries no spot history; keep what we have collected.
+            spot: state.spot,
             lastEventMs: nowMs,
           };
           break;

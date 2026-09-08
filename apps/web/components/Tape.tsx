@@ -27,12 +27,14 @@ export function Tape({ fills }: { fills: TapeFill[] }) {
   }
   return (
     <ol className="divide-y divide-line">
-      {fills.slice(0, TAPE_ROWS).map((f) => (
+      {fills.slice(0, TAPE_ROWS).map((f, i) => (
         <li
           key={f.fillId}
           data-testid={`tape-row-${f.fillId}`}
           data-agent={f.agent}
-          className="grid grid-cols-[4.4rem_3.4rem_1fr_auto] items-baseline gap-4 py-2.5 font-mono text-base tabular-nums"
+          className={`grid grid-cols-[4.4rem_3.4rem_1fr_auto] items-baseline gap-4 rounded px-2 py-2.5 font-mono text-base tabular-nums ${
+            i === 0 ? 'land' : ''
+          }`}
         >
           <time className="text-ink-faint">{clock(f.tsMs)}</time>
           <span className={f.side === 'YES' ? 'text-long' : 'text-short'}>{f.side}</span>
@@ -41,7 +43,7 @@ export function Tape({ fills }: { fills: TapeFill[] }) {
             <span className="text-ink-faint"> @ </span>
             <span data-testid={`tape-price-${f.fillId}`}>{(f.price * 100).toFixed(1)}</span>
             <span className="text-ink-faint">%</span>
-            <span className="ml-2 text-ink-muted">{f.agent}</span>
+            <span className={`ml-2 ${f.agent === 'ECHO' ? 'text-echo' : 'text-accent'}`}>{f.agent}</span>
           </span>
           {f.explorerUrl ? (
             <a

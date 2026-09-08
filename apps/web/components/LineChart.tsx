@@ -28,7 +28,7 @@ export function LineChart({
   const [ref, size] = useSize<HTMLDivElement>();
   const width = size.width || 0;
   const box = { width, height, padL: 44, padR: 8, padT: 8, padB: 4 };
-  const { d, area, y, domainY } = buildSeriesPath(points, box);
+  const { curve, area, y, domainY } = buildSeriesPath(points, box);
   const ticks = width ? niceTicks(domainY[0], domainY[1], 3) : [];
 
   return (
@@ -74,9 +74,9 @@ export function LineChart({
           {fill && area ? (
             <path d={area} fill="currentColor" opacity="0.10" />
           ) : null}
-          {d ? (
+          {curve ? (
             <path
-              d={d} fill="none" stroke="currentColor" strokeWidth="1.75"
+              d={curve} fill="none" stroke="currentColor" strokeWidth="1.75"
               strokeLinejoin="round" strokeLinecap="round"
               // The stroke keeps its width no matter how the SVG is sized.
               vectorEffect="non-scaling-stroke"

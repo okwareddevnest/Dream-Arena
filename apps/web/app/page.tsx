@@ -11,10 +11,11 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Logo, Wordmark } from '../components/Logo';
+import { HeroInstrument, type HeroPoint } from '../components/HeroInstrument';
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8080';
 
-interface Live { mode: string | null; markets: number; trades: number; valuations: number }
+interface Live { mode: string | null; markets: number; trades: number; valuations: number; points: HeroPoint[] }
 
 function useLive(): { live: Live | null; offline: boolean } {
   const [live, setLive] = useState<Live | null>(null);
@@ -33,6 +34,14 @@ function useLive(): { live: Live | null; offline: boolean } {
           markets: (s?.markets ?? []).length,
           trades: (s?.tape ?? []).length,
           valuations: (s?.valuations ?? []).length,
+          // Real divergences drive the hero when the agent is up.
+          points: (s?.valuations ?? [])
+            .filter((v: { skipReason?: string | null }) => v.skipReason == null)
+            .slice(0, 6)
+            .map((v: { marketId: string; pModel: number; pMarket: number }) => ({
+              symbol: (s?.markets ?? []).find((m: { id: string }) => m.id === v.marketId)?.symbol ?? 'market',
+              pModel: v.pModel, pMarket: v.pMarket,
+            })),
         });
         setOffline(false);
       } catch {
@@ -108,23 +117,9 @@ export default function LaunchPage() {
               you can check it.
             </p>
 
-            {/* The thesis as one line of geometry — the mark, drawn working. */}
-            <figure className="mt-14 max-w-[52rem] border-y border-line py-9">
-              <div className="relative h-12">
-                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-line" />
-                <span className="absolute left-[31%] top-1/2 h-6 w-px -translate-y-1/2 bg-ink-muted" />
-                <span className="absolute left-[68%] top-1/2 h-9 w-px -translate-y-1/2 bg-accent" />
-                <span
-                  className="absolute top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-accent"
-                  style={{ left: '31%', width: '37%' }}
-                />
-              </div>
-              <figcaption className="mt-6 flex flex-wrap gap-x-10 gap-y-2 text-sm text-ink-faint">
-                <span>Left mark: what the market is pricing</span>
-                <span>Right mark: what MIRA believes</span>
-                <span className="text-accent">Between them: the trade</span>
-              </figcaption>
-            </figure>
+            <div className="mt-14 max-w-[46rem]">
+              <HeroInstrument points={live?.points ?? []} live={!!live && !offline} />
+            </div>
 
             <div className="mt-12">
               <Link
@@ -193,6 +188,46 @@ export default function LaunchPage() {
                 <div key={t} className="border-t border-line pt-3">
                   <dt className="text-base text-ink">{t}</dt>
                   <dd className="mt-1.5 max-w-[40ch] text-sm leading-relaxed text-ink-muted">{d}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+
+        {/* What it is built on — concrete, checkable, no marketing adjectives. */}
+        <section aria-label="Built on" className="border-b border-line px-6 py-16 lg:px-10">
+          <h2 className="font-display text-[clamp(1.6rem,3vw,2.4rem)] text-ink">What it runs on</h2>
+          <dl className="mt-10 grid gap-x-12 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+            {([
+              ['Somnia testnet', 'Chain 50312. Binary prediction markets settled at expiry, quoted as an order book per outcome.'],
+              ['Volatility model', 'Exponentially-weighted moving variance over log returns, updated on every spot tick.'],
+              ['Pricing', 'The normal CDF of d₂, with Itô\u2019s correction. The inverse reads the book back as an implied volatility.'],
+              ['Position sizing', 'Quarter-Kelly on the measured edge, then whichever hard cap binds first.'],
+            ] as [string, string][]).map(([t, d]) => (
+              <div key={t} className="rounded-card border border-line bg-surface p-5">
+                <dt className="text-base text-ink">{t}</dt>
+                <dd className="mt-2 text-base leading-relaxed text-ink-muted">{d}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        {/* The honest limitations. A page that lists none is not credible. */}
+        <section aria-label="Limits" className="border-b border-line px-6 py-16 lg:px-10">
+          <div className="grid gap-12 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+            <h2 className="font-display text-[clamp(1.6rem,3vw,2.4rem)] text-ink">
+              What this does not claim
+            </h2>
+            <dl className="grid gap-x-12 gap-y-7 sm:grid-cols-2">
+              {([
+                ['It is not proven profitable', 'It trades a model against a book. Over a short session, profit and loss says more about the market than about the model.'],
+                ['The testnet book is thin', 'These venues launched with no organic flow. Prices there are not the prices a deep market would produce.'],
+                ['Spot comes from an exchange', 'The underlying price is read from Binance. Real prices, but not sourced from the venue it trades on.'],
+                ['A skip is not a failure', 'Most markets are refused most of the time. That is the model declining to guess, and it is the behaviour to want.'],
+              ] as [string, string][]).map(([t, d]) => (
+                <div key={t} className="border-t border-line pt-3">
+                  <dt className="text-base text-ink">{t}</dt>
+                  <dd className="mt-2 max-w-[42ch] text-base leading-relaxed text-ink-muted">{d}</dd>
                 </div>
               ))}
             </dl>

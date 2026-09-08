@@ -15,8 +15,11 @@ describe('PnlChart', () => {
   it('draws a real, measured path through the series', () => {
     const { container } = render(<PnlChart series={[pt(1, 0), pt(2, 5), pt(3, -2)]} />);
     const path = container.querySelector('svg path[stroke]')!;
-    expect(path.getAttribute('d')).toMatch(/^M/);
-    expect(path.getAttribute('d')!.split('L').length).toBeGreaterThan(1);
+    const d = path.getAttribute('d')!;
+    expect(d).toMatch(/^M/);
+    // The series is drawn as a SMOOTH curve now: cubic segments, not a polyline.
+    expect(d).toContain('C');
+    expect(d.split('C').length).toBeGreaterThan(1);
     // Sharpness: the stroke must not scale with the box.
     expect(path.getAttribute('vector-effect')).toBe('non-scaling-stroke');
   });

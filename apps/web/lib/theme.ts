@@ -5,37 +5,45 @@
 
 /** Broadcast palette: a near-black ground so live numbers and the gauge carry the screen. */
 export const PALETTE = {
-  /** page ground — a deep blue-black, not a neutral one: the cool cast makes the
-   *  green/red of a position read as colour rather than as noise on grey */
-  bg: '#06080b',
-  /** panel ground */
-  surface: '#0b0f14',
-  /** raised panel / hovered row */
-  raised: '#121820',
-  /** hairline borders — structure comes from these, not from shadows */
-  line: '#1b232d',
-  /** chart gridlines: present enough to read a value against, quiet enough to
-   *  never compete with the series */
-  grid: '#141c25',
-  /** primary text */
-  ink: '#e8eef4',
-  /** secondary text — labels, units */
-  'ink-muted': '#93a1b0',
-  /** tertiary text — timestamps, disabled */
-  'ink-faint': '#5b6875',
-  /** MIRA's identity, and the divergence span. The only saturated thing on the
-   *  arena, so a large edge is visible from across a room. */
-  accent: '#4cc9f0',
+  /** The ground: a deep, warm-leaning charcoal-indigo. Not a blue-black terminal
+   *  and not a neutral grey — it has a temperature, which is what stops a dark
+   *  interface feeling like a void. */
+  bg: '#0b0c10',
+  /** panel ground, one step up */
+  surface: '#131519',
+  /** raised — feature cards, inputs, the instrument face */
+  raised: '#1b1e24',
+  /** the step above raised, used sparingly */
+  overlay: '#242830',
+  /** hairline structure */
+  line: '#2a2f38',
+  /** chart gridlines */
+  grid: '#20242b',
+  /** primary text — warm white, not clinical */
+  ink: '#f2efe9',
+  /** secondary */
+  'ink-muted': '#a8a49c',
+  /** tertiary */
+  'ink-faint': '#6b6862',
+  /** MIRA. A soft aqua that reads as considered rather than neon. */
+  accent: '#5ecfc0',
+  /** MIRA at full intensity — only where the eye must land first */
+  'accent-hot': '#9df0e2',
+  /** The warm counterpoint. An interface with only cool colour feels cold; this
+   *  is the warmth, used for value, gain and emphasis. */
+  gold: '#e8b464',
+  /** ECHO — its own identity, so two agents on one tape are told apart at a glance */
+  echo: '#b98ee0',
   /** long / YES / profit */
-  long: '#2ee6a8',
+  long: '#6ec98d',
   /** short / NO / loss */
-  short: '#ff5d7a',
-  /** caution — stale feed, degraded health */
-  warn: '#ffc857',
-  /** LIVE badge (real venue, real money-at-risk) */
-  live: '#2ee6a8',
-  /** SIM badge (test rig only — never the demo path) */
-  sim: '#ffc857',
+  short: '#e8737f',
+  /** caution */
+  warn: '#e8b464',
+  /** LIVE badge */
+  live: '#6ec98d',
+  /** SIM badge */
+  sim: '#e8b464',
 } as const;
 
 export type ThemeToken = keyof typeof PALETTE;

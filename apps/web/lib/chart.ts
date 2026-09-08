@@ -11,6 +11,8 @@
 // linear maps with explicit degenerate-domain behaviour, so a flat series or a
 // single point cannot silently produce NaN geometry.
 
+import { monotoneCubicPath } from './curve';
+
 export interface Point { x: number; y: number }
 export interface Box {
   width: number; height: number;
@@ -52,6 +54,8 @@ export function niceTicks(lo: number, hi: number, count = 4): number[] {
 }
 
 export interface SeriesPath {
+  /** Smooth, shape-preserving path (monotone cubic). */
+  curve: string;
   d: string;
   area: string;
   x: (v: number) => number;
@@ -75,19 +79,22 @@ export function buildSeriesPath(points: Point[], box: Box): SeriesPath {
   const x = scaleLinear(domainX, [x0, x1]);
   const y = scaleLinear(domainY, [y1, y0]);   // screen y grows downward
 
-  if (!points.length) return { d: '', area: '', x, y, domainY };
+  if (!points.length) return { d: '', curve: '', area: '', x, y, domainY };
 
   // A single reading is real information: draw it as a level, not a dot nobody sees.
   if (points.length === 1) {
     const yy = ((y1 + y0) / 2).toFixed(2);
-    return { d: `M${x0.toFixed(2)},${yy}L${x1.toFixed(2)},${yy}`, area: '', x, y, domainY };
+    const flat = `M${x0.toFixed(2)},${yy}L${x1.toFixed(2)},${yy}`;
+    return { d: flat, curve: flat, area: '', x, y, domainY };
   }
 
   const d = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.x).toFixed(2)},${y(p.y).toFixed(2)}`)
     .join('');
-  const area = `${d}L${x1.toFixed(2)},${y1.toFixed(2)}L${x0.toFixed(2)},${y1.toFixed(2)}Z`;
-  return { d, area, x, y, domainY };
+  // Smoothed in SCREEN space, after scaling, so the curve is smooth as drawn.
+  const curve = monotoneCubicPath(points.map((p) => ({ x: x(p.x), y: y(p.y) })));
+  const area = `${curve}L${x1.toFixed(2)},${y1.toFixed(2)}L${x0.toFixed(2)},${y1.toFixed(2)}Z`;
+  return { d, curve, area, x, y, domainY };
 }
 
 /** Snap a coordinate to a half-pixel so a 1px rule renders as one crisp line

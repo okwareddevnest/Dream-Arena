@@ -9,6 +9,8 @@ export { MirrorService, type MirrorOptions, type MirrorResult, type MirrorStats 
 export { RestRouter, parseUrl, safeEqual, type RestRequest, type RestResponse, type RestOptions,
   type ConsoleActions } from './rest.ts';
 export { HuntService, proRataWeights, type HuntOptions, type HuntStats } from './hunt.ts';
+export { murphy, calibrationBuckets, userRecord, headToHead,
+  type Murphy, type Bucket, type HeadToHead } from './calibration.ts';
 
 export const LANE: LaneId = 'API';
 export const PACKAGE = '@arena/api' as const;

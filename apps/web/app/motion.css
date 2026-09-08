@@ -1,0 +1,42 @@
+/* Motion vocabulary.
+ *
+ * Three ideas only, each tied to a real event, because scattered animation reads
+ * as decoration and decoration is what makes an interface feel generic:
+ *   · breathe — something is ALIVE and worth acting on (a tradeable divergence)
+ *   · land    — something ARRIVED (a fill hitting the tape)
+ *   · sweep   — the feed is live (a slow pass across the instrument)
+ * Everything else is still. All of it stops for prefers-reduced-motion.
+ */
+
+@keyframes arena-breathe {
+  0%, 100% { opacity: 0.85; transform: scaleY(1); }
+  50%      { opacity: 1;    transform: scaleY(1.35); }
+}
+@keyframes arena-land {
+  0%   { opacity: 0; transform: translateY(-6px); background-color: var(--arena-overlay); }
+  60%  { opacity: 1; transform: translateY(0); }
+  100% { background-color: transparent; }
+}
+@keyframes arena-sweep {
+  0%   { transform: translateX(-100%); opacity: 0; }
+  35%  { opacity: 0.5; }
+  100% { transform: translateX(220%); opacity: 0; }
+}
+@keyframes arena-pulse-ring {
+  0%   { opacity: 0.55; transform: scale(1); }
+  70%  { opacity: 0;    transform: scale(2.6); }
+  100% { opacity: 0; }
+}
+
+.breathe { animation: arena-breathe 2.4s ease-in-out infinite; transform-origin: center; }
+.land    { animation: arena-land 620ms cubic-bezier(0.22, 1, 0.36, 1) 1; }
+.sweep   { animation: arena-sweep 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+.ring    { animation: arena-pulse-ring 2.4s ease-out infinite; }
+
+/* Numbers should not jump when they change. */
+.tabular-shift { transition: color 220ms ease, opacity 220ms ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .breathe, .land, .sweep, .ring { animation: none !important; }
+  .tabular-shift { transition: none !important; }
+}
