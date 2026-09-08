@@ -29,7 +29,13 @@
     "echo": "node --env-file-if-exists=.env --experimental-strip-types packages/ops/src/echoMain.ts",
     "web": "npm --prefix apps/web run dev",
     "web:build": "npm --prefix apps/web run build",
-    "web:start": "npm --prefix apps/web run start"
+    "web:start": "npm --prefix apps/web run start",
+    "replay": "node packages/ops/scripts/replay.mjs",
+    "test:gwt": "vitest run --project integration",
+    "gates": "node --env-file-if-exists=.env packages/ops/scripts/gates.mjs",
+    "drill": "node --env-file-if-exists=.env packages/ops/scripts/drill.mjs",
+    "seed": "node --env-file-if-exists=.env packages/ops/scripts/seed.mjs",
+    "bundle": "node --env-file-if-exists=.env packages/ops/scripts/bundle.mjs"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.13",
@@ -42,6 +48,7 @@
     "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "5.0.2",
     "jsdom": "26.1.0",
+    "mermaid": "11.4.1",
     "tailwindcss": "4.1.13",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

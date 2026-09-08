@@ -1,0 +1,32 @@
+# CI (T-066).
+#
+# Runs everything that does NOT need a funded key or a live chain. The live
+# suite is deliberately excluded: it signs real transactions, and a CI run must
+# never depend on testnet weather or spend collateral. It is run by hand before
+# a demo (`npm run test:live`), and its skips are loud when no key is present.
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck (packages + web)
+        run: npm run typecheck
+      - name: Unit
+        run: npm run test
+      - name: Web (includes a production next build)
+        run: npm run test:web
+      - name: GWT acceptance
+        run: npm run test:integration
+      - name: Fault injection
+        run: npm run test:fault
+      - name: Docs gate G0
+        run: npm run gate:0

@@ -6,6 +6,10 @@
 // with no transaction behind it (SIM) says so plainly and offers no dead link.
 // spec: PRD F-A1 · IF §5
 
+'use client';
+import { useState } from 'react';
+import { fetchReceipt, formatReceipt, type ReceiptView } from '../lib/receipt';
+
 export const TAPE_ROWS = 60;
 
 export interface TapeFill {
@@ -18,6 +22,15 @@ const clock = (ms: number) =>
   new Date(ms).toISOString().slice(11, 19);
 
 export function Tape({ fills }: { fills: TapeFill[] }) {
+  // Verification happens ON THE PAGE. A link to the explorer opens a background
+  // tab and leaves the viewer looking at the same screen with nothing shown —
+  // that is a promise of evidence, not evidence.
+  const [checked, setChecked] = useState<Record<string, ReceiptView | 'checking'>>({});
+  const verify = (f: TapeFill) => {
+    if (!f.txHash) return;
+    setChecked((c) => ({ ...c, [f.fillId]: 'checking' }));
+    void fetchReceipt(f.txHash).then((r) => setChecked((c) => ({ ...c, [f.fillId]: r })));
+  };
   if (!fills.length) {
     return (
       <p data-testid="tape-empty" className="py-8 text-center text-base text-ink-faint">
@@ -45,19 +58,39 @@ export function Tape({ fills }: { fills: TapeFill[] }) {
             <span className="text-ink-faint">%</span>
             <span className={`ml-2 ${f.agent === 'ECHO' ? 'text-echo' : 'text-accent'}`}>{f.agent}</span>
           </span>
-          {f.explorerUrl ? (
-            <a
-              href={f.explorerUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={f.txHash ?? undefined}
-              className="text-accent underline-offset-2 hover:underline"
+          {f.txHash ? (
+            <button
+              type="button"
+              data-testid={`verify-${f.fillId}`}
+              onClick={() => verify(f)}
+              title={f.txHash}
+              className="rounded border border-line px-2 py-1 text-sm text-accent hover:border-accent"
             >
-              Verify
-            </a>
+              {checked[f.fillId] === 'checking' ? 'checking…' : 'Verify'}
+            </button>
           ) : (
             <span className="text-ink-faint">SIM</span>
           )}
+          {checked[f.fillId] && checked[f.fillId] !== 'checking' ? (
+            <p
+              data-testid={`receipt-${f.fillId}`}
+              className={`col-span-4 mt-1 font-sans text-sm ${
+                (checked[f.fillId] as ReceiptView).success ? 'text-long' : 'text-warn'
+              }`}
+            >
+              {formatReceipt(checked[f.fillId] as ReceiptView)}{' '}
+              {f.explorerUrl ? (
+                <a
+                  href={f.explorerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent underline underline-offset-2"
+                >
+                  Open in explorer
+                </a>
+              ) : null}
+            </p>
+          ) : null}
         </li>
       ))}
     </ol>

@@ -9,6 +9,8 @@ export { MirrorService, type MirrorOptions, type MirrorResult, type MirrorStats 
 export { RestRouter, parseUrl, safeEqual, type RestRequest, type RestResponse, type RestOptions,
   type ConsoleActions } from './rest.ts';
 export { HuntService, proRataWeights, type HuntOptions, type HuntStats } from './hunt.ts';
+export { AuthService, type AuthOptions, type Session } from './auth.ts';
+export { RoundDriver, type RoundDriverOptions } from './roundDriver.ts';
 export { murphy, calibrationBuckets, userRecord, headToHead,
   type Murphy, type Bucket, type HeadToHead } from './calibration.ts';
 

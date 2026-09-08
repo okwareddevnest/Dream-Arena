@@ -5,8 +5,21 @@
 // cancels, and proves it is gone. Verification reads the order book (one eth_call
 // = chain truth); it deliberately does NOT trust `getOpenOrders`, which the SDK
 // documents as lagging the chain and which returns empty right after a write.
-import { defineChain } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, http, parseAbi, getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+
+/**
+ * Gas ceiling for a write.
+ *
+ * The SDK defaults to 10,000,000 and signs at a fixed 60 gwei, so EVERY
+ * transaction reserves 0.6 STT of headroom whether it needs it or not — and when
+ * the balance dips under that, the RPC rejects the send and the SDK reports
+ * "Missing or invalid parameters", which sounds like a bug in the call. The real
+ * message is buried in the cause: "insufficient balance".
+ * Measured on-chain: a resting order costs ~327k, a crossing order ~2.52M. Four
+ * million is comfortable headroom and reserves ~0.24 STT instead of 0.6.
+ */
+export const WRITE_GAS = 4_000_000n;
 
 export const DEC = 6n;
 export const ONE = 10n ** DEC;
@@ -84,7 +97,37 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
   const ex: any = new SomniaMarkets({
     indexerUrl, chain, wsRpcUrl, privateKey: key, addresses: SOMNIA_TESTNET_ADDRESSES,
   });
-  const owner = privateKeyToAccount(key as `0x${string}`).address;
+  const account = privateKeyToAccount(key as `0x${string}`);
+  const owner = account.address;
+
+  /**
+   * Approve the pool to pull collateral, ourselves.
+   *
+   * The SDK's `autoApprove` reverts here with "approve reverted: Missing or
+   * invalid parameters" even on a zero allowance and a funded wallet, so the
+   * approval is done explicitly: read the allowance, and only send when short.
+   * Doing it deliberately is better anyway — an approval is a real permission
+   * grant and should not be a side effect of placing an order.
+   */
+  const erc20 = parseAbi([
+    'function allowance(address,address) view returns (uint256)',
+    'function approve(address,uint256) returns (bool)',
+  ]);
+  const pub = createPublicClient({ chain, transport: http(rpcUrl, { timeout: 12_000, retryCount: 2 }) });
+  const wallet = createWalletClient({ account, chain, transport: http(rpcUrl, { timeout: 20_000, retryCount: 2 }) });
+
+  const ensureAllowance = async (token: string, spender: string, need: bigint): Promise<void> => {
+    const t = getAddress(token.toLowerCase()), sp = getAddress(spender.toLowerCase());
+    const have = await pub.readContract({ address: t, abi: erc20, functionName: 'allowance', args: [owner, sp] });
+    if ((have as bigint) >= need) return;
+    log(`approving ${sp.slice(0, 10)}… to spend collateral`);
+    const hash = await wallet.writeContract({
+      address: t, abi: erc20, functionName: 'approve',
+      args: [sp, 2n ** 96n],           // generous but not unbounded
+    });
+    const rc = await pub.waitForTransactionReceipt({ hash });
+    if (rc.status !== 'success') throw new Error(`approve reverted: ${hash}`);
+  };
 
   let orderId: string | null = null;
   let pool = '';
@@ -134,11 +177,30 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
     // GOTCHA: `side` is the STRING BinarySide, NOT the numeric ORDER_KIND ordinal
     // (that ordinal belongs to the raw contract tier). Passing the number fails
     // deep inside the SDK with "cannot read properties of undefined (reading 'kind')".
-    const placed: any = await ex.trader.placeOrder({
+    // Permission first, explicitly, then the order with autoApprove OFF.
+    await ensureAllowance(String(market.collateral), pool, priceRaw * qtyRaw);
+
+    let placed: any;
+    try {
+      placed = await ex.trader.placeOrder({
       pool, side: 'BUY_YES', price: priceRaw, quantity: qtyRaw,
       outcomeToken: onchain.outcomeToken, yesId: onchain.yesId, noId: onchain.noId,
-      collateral: market.collateral, orderType: 3 /* POST_ONLY */, autoApprove: true,
-    });
+        collateral: market.collateral, orderType: 3 /* POST_ONLY */, autoApprove: false,
+        gas: WRITE_GAS,
+      });
+    } catch (e) {
+      // The SDK reports an unaffordable write as "Missing or invalid parameters",
+      // which sends a reader to audit their arguments. Name the real cause.
+      const cause = (e as { cause?: { details?: string } })?.cause?.details ?? '';
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/insufficient balance/i.test(cause) || /insufficient balance/i.test(msg)) {
+        throw new Error(
+          `not enough STT for gas — a write reserves ${Number(WRITE_GAS) * 60 / 1e9} STT. ` +
+          `Top up ${owner} (see docs/70-FUNDING.md).`,
+        );
+      }
+      throw e;
+    }
     assertTxOk(placed, 'placeOrder');
     orderId = placed.orderId != null ? String(placed.orderId) : null;
     const fills = placed.fills?.length ?? 0;
@@ -153,7 +215,7 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
     log(`resting after place ${restingAfterPlace} ✓`);
 
     // ── cancel ────────────────────────────────────────────────────────────
-    const cancelled: any = await ex.trader.cancelOrder({ pool, orderId: placed.orderId });
+    const cancelled: any = await ex.trader.cancelOrder({ pool, orderId: placed.orderId, gas: WRITE_GAS });
     assertTxOk(cancelled, 'cancelOrder');
     orderId = null;
     log(`cancelled tx ${cancelled.hash}`);

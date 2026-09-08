@@ -14,7 +14,7 @@ import type {
 import type { Store } from '@arena/data';
 import {
   Broadcaster, RestRouter, HuntService, MirrorService, parseUrl,
-  userRecord, calibrationBuckets, headToHead, type Socket,
+  userRecord, calibrationBuckets, headToHead, RoundDriver, AuthService, type Socket,
 } from '@arena/api';
 
 export interface ArenaServerOptions {
@@ -60,16 +60,48 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
   // HuntService scores forecasts but does not store them, and settlements are
   // history the REST layer serves. Both live here, with the server as the only
   // writer.
+  // Identity. Connecting a wallet reveals an address; signing proves it. Without
+  // this, anyone could post a forecast under anyone else's address — which is
+  // exactly what happened during the build, against MIRA's own wallet.
+  const auth = new AuthService({
+    domain: new URL(cfg.serve.webOrigin).host,
+    uri: cfg.serve.webOrigin,
+    chainId: cfg.somnia.chainId,
+  });
+
   const forecasts: Forecast[] = [];
   const settlements: Settlement[] = [];
   let forecastSeq = 0;
+  /** The authenticated address for the request being handled, or null. */
+  let pendingAuthAddr: string | null = null;
 
   /** Accept a forecast from WS or REST. One shape, one validation path. */
-  const takeForecast = (f: Omit<Forecast, 'forecastId'>): { status: number; body: unknown } => {
+  const takeForecast = (
+    f: Omit<Forecast, 'forecastId'>,
+    authedAddr: string | null,
+  ): { status: number; body: unknown } => {
+    // A forecast is a claim about YOUR judgement. It has to be yours.
+    if (!authedAddr) {
+      return { status: 401, body: { error: 'sign in with your wallet to make a call' } };
+    }
+    if (f.userAddr && f.userAddr.toLowerCase() !== authedAddr) {
+      return { status: 403, body: { error: 'you can only forecast as yourself' } };
+    }
     if (!f?.marketId || typeof f.p !== 'number' || !(f.p > 0) || !(f.p < 1)) {
       return { status: 400, body: { error: 'p must be a probability in (0,1) and marketId is required' } };
     }
-    const full: Forecast = { ...f, forecastId: `fc-${++forecastSeq}` };
+    const open = hunt.round;
+    if (!open || open.status !== 'OPEN') {
+      return { status: 409, body: { error: 'no round is open right now' } };
+    }
+    if (!open.marketIds.includes(f.marketId)) {
+      return { status: 400, body: { error: 'that market is not in the open round' } };
+    }
+    // Stamp the CURRENT round: a client-supplied roundId could score a forecast
+    // against a round it was never made in.
+    const full: Forecast = {
+      ...f, userAddr: authedAddr, roundId: open.roundId, forecastId: `fc-${++forecastSeq}`,
+    };
     forecasts.push(full);
     o.journalForecast?.(full);
     return { status: 202, body: { forecastId: full.forecastId } };
@@ -78,7 +110,9 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
   const snapshot = () => store.snapshot(now());
   const broadcaster = new Broadcaster({
     bus, snapshot, now, runId: cfg.runId,
-    onForecast: (f) => { takeForecast(f); },
+    // The socket carries no session, so a forecast over WS is rejected the same
+    // way an unsigned REST call is. One rule, one path.
+    onForecast: (f) => { takeForecast(f, null); },
     onError: (e, id) => log(`WS ERROR ${id}: ${e.message}`),
   });
 
@@ -89,7 +123,7 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
     rounds: () => ({ round: null, history: settlements }),
     agentProfile: o.agentProfile,
     mirror: (body) => buildMirror(body),
-    forecast: takeForecast,
+    forecast: (f) => takeForecast(f, pendingAuthAddr),
     console: {
       kill: (by) => o.kill(by),
       unkill: (by) => o.unkill(by),
@@ -100,6 +134,42 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
     operatorToken: cfg.serve.operatorToken,
     webOrigin: cfg.serve.webOrigin,
   });
+
+  /**
+   * Resolved outcomes, read from the VENUE. A market the chain has not settled
+   * scores nobody — which is why an open round simply waits rather than paying
+   * out on a guess.
+   */
+  async function chainOutcomes(): Promise<Outcome[]> {
+    if (o.outcomes) return o.outcomes();
+    const venue = o.venue;
+    if (!venue) return [];
+    const settledMarkets = await venue.settledMarkets(40).catch(() => [] as { id: string; status: string; winningOutcome?: number | null }[]);
+    return (settledMarkets as { id: string; winningOutcome?: number | null }[])
+      .filter((m) => m.winningOutcome === 0 || m.winningOutcome === 1)
+      .map((m) => ({
+        marketId: m.id, roundId: '', resolved: true,
+        outcome: (m.winningOutcome === 0 ? 0 : 1) as 0 | 1,
+        resolvedTsMs: now(),
+      }));
+  }
+
+  // The loop that makes the arena multi-player. Without it HuntService never
+  // opens a round, so no forecast is ever scored and every scorecard reads
+  // "untested" — which is exactly how this shipped until now.
+  const driver = new RoundDriver({
+    hunt, clock,
+    markets: () => snapshot().markets,
+    outcomes: chainOutcomes,
+    forecasts: () => forecasts,
+    miraPnlUsd: () => {
+      const curve = snapshot().pnlCurve;
+      return curve.length ? curve[curve.length - 1]!.pnlUsd : 0;
+    },
+    onSettle: (s) => { settlements.unshift(s); o.onSettle?.(s); },
+    onError: (e) => log(`ROUND ERROR ${e.message}`),
+  });
+  const stopDriver = driver.start(5_000);
 
   /**
    * MIRROR: turn "copy MIRA's last trade" into an unsigned intent the user signs
@@ -125,14 +195,17 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
     return r.ok ? { status: 200, body: r.intent } : { status: 422, body: { error: r.reason } };
   }
 
-  /** Close the open round, score it, and keep the settlement for /rounds. */
+  /** Force the open round closed, from the console. Uses the same path as the
+   *  driver so a manual close cannot behave differently from a timed one. */
   async function settleRound(): Promise<void> {
     const closed = hunt.closeForScoring();
     if (!closed) return;
-    const snap = snapshot();
-    const outcomes: Outcome[] = (o.outcomes?.() ?? []) as Outcome[];
-    const s = hunt.settle({ roundId: closed.roundId, forecasts, outcomes });
-    if (s) settlements.unshift(s);
+    const s = hunt.settle({
+      roundId: closed.roundId,
+      forecasts: forecasts.filter((f) => f.roundId === closed.roundId),
+      outcomes: await chainOutcomes(),
+    });
+    if (s) { settlements.unshift(s); o.onSettle?.(s); }
   }
 
   /**
@@ -161,12 +234,42 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => {
+    req.on('end', () => { void (async () => {
 
       const raw: string = Buffer.concat(chunks).toString('utf8');
       // The router parses the body itself, so hand it the raw string.
       const url: string = req.url ?? '/';
       const { path, query } = parseUrl(url);
+
+      // ── Sign-In With Ethereum ────────────────────────────────────────────
+      if (path === '/api/auth/nonce' && req.method === 'POST') {
+        let addr = '';
+        try { addr = String(JSON.parse(raw || '{}').address ?? ''); } catch { /* bad body */ }
+        const ok = /^0x[0-9a-fA-F]{40}$/.test(addr);
+        res.writeHead(ok ? 200 : 400, {
+          'content-type': 'application/json',
+          'access-control-allow-origin': cfg.serve.webOrigin,
+        });
+        res.end(JSON.stringify(ok ? auth.challenge(addr) : { error: 'a valid address is required' }));
+        return;
+      }
+      if (path === '/api/auth/verify' && req.method === 'POST') {
+        let body: { message?: string; signature?: string } = {};
+        try { body = JSON.parse(raw || '{}'); } catch { /* bad body */ }
+        const session = await auth.verify(String(body.message ?? ''), String(body.signature ?? ''));
+        res.writeHead(session ? 200 : 401, {
+          'content-type': 'application/json',
+          'access-control-allow-origin': cfg.serve.webOrigin,
+        });
+        res.end(JSON.stringify(session
+          ? { token: session.token, address: session.address, expiresAt: session.expiresAt }
+          : { error: 'signature did not verify' }));
+        return;
+      }
+
+      // Resolve the caller's session for the routes that need it.
+      const bearer = String(req.headers['authorization'] ?? '').replace(/^Bearer /i, '');
+      pendingAuthAddr = auth.addressFor(bearer);
 
       // Per-user scorecard. Added after IF §13 was frozen, so it lives beside the
       // router rather than inside it — the frozen surface stays untouched.
@@ -202,7 +305,7 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: 'internal' }));
         });
-    });
+    })(); });
   });
 
   // ── WebSocket (IF §13) ────────────────────────────────────────────────────
@@ -250,6 +353,7 @@ export async function startArenaServer(o: ArenaServerOptions): Promise<ArenaServ
   return {
     port, hunt, broadcaster,
     async stop() {
+      stopDriver();
       await new Promise<void>((resolve) => { wss.close(() => resolve()); });
       await new Promise<void>((resolve) => { http.close(() => resolve()); });
     },

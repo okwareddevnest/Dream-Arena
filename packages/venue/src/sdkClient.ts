@@ -8,6 +8,14 @@ import type { SdkClient, SdkLiveFill, SdkMarketRow, SdkOnchainMarket, SdkOrderBo
 
 /** Collateral and outcome sizes are 6dp on testnet (verified on-chain). */
 export const RAW_DECIMALS = 6;
+/**
+ * Gas ceiling for every write. The SDK's 10,000,000 default at a fixed 60 gwei
+ * reserves 0.6 STT per transaction; when the balance falls under that the RPC
+ * refuses the send and the error surfaces as "Missing or invalid parameters"
+ * with the real reason ("insufficient balance") buried in the cause. Measured:
+ * a resting order ~327k gas, a crossing order ~2.52M.
+ */
+export const WRITE_GAS = 4_000_000n;
 const RAW_ONE = 10 ** RAW_DECIMALS;
 
 export type OutcomeSide = 'YES' | 'NO';
@@ -198,6 +206,7 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
         orderType: args.orderType,
         expireTimestampNs: args.expireTimestampNs,
         autoApprove: true,
+        gas: WRITE_GAS,
       }));
       // Nonce is handled by the SDK's own tracker; the venue's TxQueue still
       // serialises submissions so one key never has two writes in flight.
@@ -215,7 +224,7 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
     async cancelOrder(args): Promise<SdkTxResult> {
       requireSigner('cancelOrder');
       const res: any = await ex.trader.cancelOrder({
-        pool: await poolFor(args.marketId), orderId: args.orderId,
+        pool: await poolFor(args.marketId), orderId: args.orderId, gas: WRITE_GAS,
       });
       return { hash: res.hash, receipt: res.receipt };
     },
@@ -260,7 +269,7 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
       // Reclaims escrow from orders the pool considers expired; a normal cancel
       // on one reverts with IncorrectSender(caller, 0x0) and leaves it locked.
       const res: any = await ex.trader.cancelExpiredOrders({
-        pool: await poolFor(args.marketId), orderIds: args.orderIds,
+        pool: await poolFor(args.marketId), orderIds: args.orderIds, gas: WRITE_GAS,
       });
       return { hash: res.hash, receipt: res.receipt };
     },
@@ -301,6 +310,7 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
       // throw "Cannot convert undefined to a BigInt" on every mint.
       const res: any = await ex.trader.mintSet({
         pool: await poolFor(args.marketId), amount: args.quantityRaw, autoApprove: true,
+        gas: WRITE_GAS,
       });
       return { hash: res.hash, receipt: res.receipt };
     },

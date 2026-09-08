@@ -13,7 +13,10 @@ const CHAIN_ID = Number(process.env.SOMNIA_CHAIN_ID ?? 50312);
 // TestUSDC — 6 dp, public `faucet(uint256)`. Source: dreamdex-bot-kit ec-core/addresses.ts (testnet).
 const TUSDC = getAddress('0x70a86d8842fb63c4ad2b7cdddf530ebf1bb25d8e');
 const FAUCET_AMOUNT = 10_000n * 10n ** 6n; // SDK default: 10_000 tUSDC
-const GAS_FLOOR = 10n ** 17n;              // 0.1 STT — approve + mint-a-pair + several orders
+// A write reserves gas × price up front: 4,000,000 × 60 gwei = 0.24 STT, whether
+// it uses it or not. A floor below that reports OK on a wallet that cannot place
+// a single order — which it did, at 0.238 STT.
+const GAS_FLOOR = 3n * 10n ** 17n;         // 0.3 STT — one write plus margin
 
 const chain = {
   id: CHAIN_ID, name: 'Somnia Testnet',
@@ -74,7 +77,8 @@ for (const t of targets) {
   const gasOk = stt >= GAS_FLOOR, usdcOk = usdc > 0n;
   needGas ||= !gasOk;
   console.log(`\n  ${t.name.padEnd(8)}${t.address}`);
-  console.log(`    STT gas   ${formatEther(stt).padEnd(12)} ${gasOk ? GRN('OK') : RED('NEEDED')}`);
+  console.log(`    STT gas   ${formatEther(stt).padEnd(12)} ${gasOk ? GRN('OK') : RED('NEEDED')}` +
+    (gasOk ? '' : DIM('  (a write reserves 0.24)')));
   console.log(`    tUSDC     ${formatUnits(usdc, 6).padEnd(12)} ${usdcOk ? GRN('OK') : RED('NEEDED')}`);
 
   if (!wantFaucet) {

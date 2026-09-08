@@ -1,0 +1,12 @@
+# MIRA and ECHO share one image; the command chooses which runs.
+# Node 24 strips TypeScript natively, so there is no build step and the image
+# runs the same source the tests do.
+FROM node:24-alpine
+WORKDIR /repo
+COPY package.json package-lock.json ./
+COPY packages ./packages
+RUN npm ci --omit=dev --ignore-scripts || npm ci --ignore-scripts
+COPY tsconfig*.json ./
+COPY packages ./packages
+EXPOSE 8080
+CMD ["npm", "run", "agent"]

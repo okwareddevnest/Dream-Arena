@@ -209,6 +209,20 @@ export function resolutionMode(strike: string | number | null | undefined): Mark
 }
 
 /** Assert a write actually landed. The SDK does NOT throw on a revert. */
+/**
+ * The SDK reports a wallet that cannot afford a write as "Missing or invalid
+ * parameters", which sends a reader to audit their call arguments — where the
+ * problem is not. The real reason sits in `cause.details`. Say it plainly.
+ */
+export function explainTxError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const cause = (e as { cause?: { details?: string } })?.cause?.details ?? '';
+  if (/insufficient balance/i.test(cause) || /insufficient balance/i.test(msg)) {
+    return 'not enough STT for gas — top up the wallet (see docs/70-FUNDING.md)';
+  }
+  return msg;
+}
+
 export function assertTxOk(res: SdkTxResult, label: string): void {
   const status = res?.receipt?.status ?? res?.info?.receipt?.status;
   if (status === 'reverted') {
@@ -572,7 +586,7 @@ export class DreamDEXVenue implements Venue {
     } catch (e) {
       this.note(e);
       // An RPC error becomes a REJECTED ack, never an unhandled rejection.
-      return this.reject(order, e instanceof Error ? e.message : String(e));
+      return this.reject(order, explainTxError(e));
     }
   }
 

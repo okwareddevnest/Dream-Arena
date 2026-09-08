@@ -2,8 +2,9 @@
 // spec: 30-TASKS T-053 · PRD F-A1 · IF §5
 // F-A1 requires that every fill links to the testnet explorer: that link is the
 // difference between "the agent claims it traded" and a judge verifying it did.
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, cleanup, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Tape, TAPE_ROWS } from '../components/Tape';
 
 afterEach(cleanup);
@@ -25,17 +26,37 @@ describe('Tape', () => {
     expect(row.textContent).toContain('MIRA');
   });
 
-  it('links a real fill to the explorer', () => {
+  it('verifies a fill ON THE PAGE, then offers the explorer', async () => {
+    // Reading the receipt in the browser is what turns "trust me" into evidence
+    // the viewer can see without leaving the arena.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ result: { status: '0x1', blockNumber: '0x10', gasUsed: '0x20', logs: [{}] } }),
+    })));
     render(<Tape fills={[fill()]} />);
-    const link = screen.getByRole('link', { name: /verify|explorer|0xabc/i });
+    await userEvent.click(screen.getByTestId('verify-f1'));
+    await waitFor(() => expect(screen.getByTestId('receipt-f1').textContent).toMatch(/confirmed/i));
+    const link = screen.getByRole('link', { name: /explorer/i });
     expect(link.getAttribute('href')).toBe('https://shannon-explorer.somnia.network/tx/0xabc');
     expect(link.getAttribute('rel')).toContain('noopener');
+    vi.unstubAllGlobals();
   });
 
-  it('marks a SIM fill and offers no dead link', () => {
+  it('does not call a reverted transaction confirmed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, json: async () => ({ result: { status: '0x0', blockNumber: '0x10', gasUsed: '0x20', logs: [] } }),
+    })));
+    render(<Tape fills={[fill()]} />);
+    await userEvent.click(screen.getByTestId('verify-f1'));
+    await waitFor(() => expect(screen.getByTestId('receipt-f1').textContent).toMatch(/revert/i));
+    vi.unstubAllGlobals();
+  });
+
+  it('marks a SIM fill and offers nothing to verify', () => {
     render(<Tape fills={[fill({ fillId: 'f2', explorerUrl: null, txHash: null })]} />);
     const row = screen.getByTestId('tape-row-f2');
     expect(row.textContent).toContain('SIM');
+    expect(screen.queryByTestId('verify-f2')).toBeNull();
     expect(screen.queryByRole('link')).toBeNull();
   });
 

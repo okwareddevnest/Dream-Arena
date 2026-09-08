@@ -21,6 +21,7 @@ export const COMPONENTS: readonly string[] = ['simulated-venue', 'txqueue', 'non
 if (!LANES.includes(LANE)) throw new Error(`@arena/venue declares unknown lane ${LANE}`);
 
 // The REAL SDK adapter — binds DreamDEXVenue's port to @somnia-chain/markets-sdk.
+export { explainTxError } from './dreamdex.ts';
 export { createSdkClient, parseOutcomeSymbol, bookToPort, sideFromKind, rawToNum, RAW_DECIMALS } from './sdkClient.ts';
 export type { RealSdkClientOptions, OutcomeSide } from './sdkClient.ts';
 
