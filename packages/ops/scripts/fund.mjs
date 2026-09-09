@@ -16,7 +16,10 @@ const FAUCET_AMOUNT = 10_000n * 10n ** 6n; // SDK default: 10_000 tUSDC
 // A write reserves gas × price up front: 4,000,000 × 60 gwei = 0.24 STT, whether
 // it uses it or not. A floor below that reports OK on a wallet that cannot place
 // a single order — which it did, at 0.238 STT.
-const GAS_FLOOR = 3n * 10n ** 17n;         // 0.3 STT — one write plus margin
+// Tracks WRITE_GAS: 8,000,000 × 60 gwei = 0.48 STT reserved per write, whether
+// it is used or not. A floor under that reports OK on a wallet that cannot place
+// a single order — which it did, twice.
+const GAS_FLOOR = 6n * 10n ** 17n;         // 0.6 STT — one write plus real margin
 
 const chain = {
   id: CHAIN_ID, name: 'Somnia Testnet',

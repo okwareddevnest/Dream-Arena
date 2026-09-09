@@ -35,7 +35,10 @@
     "gates": "node --env-file-if-exists=.env packages/ops/scripts/gates.mjs",
     "drill": "node --env-file-if-exists=.env packages/ops/scripts/drill.mjs",
     "seed": "node --env-file-if-exists=.env packages/ops/scripts/seed.mjs",
-    "bundle": "node --env-file-if-exists=.env packages/ops/scripts/bundle.mjs"
+    "bundle": "node --env-file-if-exists=.env packages/ops/scripts/bundle.mjs",
+    "brand": "node packages/ops/scripts/brand.mjs",
+    "diagrams": "node packages/ops/scripts/diagrams.mjs",
+    "dorahacks": "node packages/ops/scripts/dorahacks.mjs"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.13",

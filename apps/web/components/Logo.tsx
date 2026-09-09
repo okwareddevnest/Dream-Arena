@@ -11,22 +11,18 @@
 
 export function Logo({ className = '', title = 'Dream Arena' }: { className?: string; title?: string }) {
   return (
-    <svg
-      viewBox="0 0 32 32"
-      role="img"
-      aria-label={title}
-      className={className}
-      fill="none"
-      strokeLinecap="round"
-    >
-      {/* the probability axis, 0 -> 1 */}
-      <line data-part="axis" x1="3" y1="16" x2="29" y2="16" stroke="currentColor" strokeWidth="1.5" opacity="0.28" />
-      {/* the span between belief and price — the edge, and the weight of the mark */}
-      <line data-part="span" x1="10" y1="16" x2="22" y2="16" stroke="currentColor" strokeWidth="6" />
-      {/* market: where the book is */}
-      <line data-part="market" x1="10" y1="7" x2="10" y2="25" stroke="currentColor" strokeWidth="3" opacity="0.5" />
-      {/* model: where MIRA thinks it should be */}
-      <line data-part="model" x1="22" y1="3" x2="22" y2="29" stroke="currentColor" strokeWidth="3.5" />
+    <svg viewBox="0 0 32 32" role="img" aria-label={title} className={className} fill="none">
+      {/* the probability axis — it must overhang both marks, or the shape reads
+          as a barbell rather than as two readings on a scale */}
+      <line data-part="axis" x1="3" y1="16" x2="29" y2="16" stroke="currentColor" strokeWidth="1.25" opacity="0.45" />
+      {/* the span between belief and price: LIGHTER than the marks, or all three
+          fuse into an "H" */}
+      <line data-part="span" x1="11" y1="16" x2="21" y2="16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+      {/* market: shorter and quieter */}
+      <line data-part="market" x1="11" y1="11.5" x2="11" y2="20.5" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" opacity="0.55" />
+      {/* model: taller, and where the eye lands */}
+      <line data-part="model" x1="21" y1="6" x2="21" y2="26" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="21" cy="16" r="1.6" fill="currentColor" />
     </svg>
   );
 }

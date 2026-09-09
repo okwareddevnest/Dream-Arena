@@ -11,7 +11,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 const RPC = process.env.SOMNIA_RPC_URL ?? 'https://api.infra.testnet.somnia.network';
 const INDEXER = process.env.SOMNIA_INDEXER_URL ?? 'https://dev.smk.somnia.host/v1/graphql';
 const VENUE_ID = process.env.VENUE_ID;
-const GAS_FLOOR = 3n * 10n ** 17n;        // 0.3 STT — several writes at 4M gas
+const GAS_FLOOR = 6n * 10n ** 17n;        // 0.6 STT — a write reserves 0.48 at 8M gas
 const USDC_FLOOR = 100n * 10n ** 6n;
 
 const chain = defineChain({

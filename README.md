@@ -1,7 +1,11 @@
+<img src="brand/logo-256.png" alt="Dream Arena" width="88" />
+
 # Dream Arena
 
 An autonomous agent trading binary prediction markets on Somnia testnet, and a
 place to watch it do so.
+
+> **Vision — make judgement measurable: one future, every forecaster, settled on-chain.**
 
 **MIRA** forecasts volatility from live spot prices, prices each market from that
 forecast, and trades only where its probability and the order book disagree by
@@ -191,6 +195,21 @@ apps/web          the site
 docs/             architecture, frozen interfaces, task cards, test plan, runbook
 state/journal/    one JSONL per run — every decision, replayable
 ```
+
+## Brand assets
+
+`brand/` holds the mark at 64–1024 px, a transparent variant, and a 1200×630
+cover; `brand/diagrams/` holds the three architecture diagrams as PNG.
+
+```
+npm run brand       # logo + cover
+npm run diagrams    # the three diagrams as PNG
+npm run dorahacks   # SUBMISSION.md → SUBMISSION-DORAHACKS.md, mermaid swapped for images
+```
+
+All of it renders from the same geometry and palette the app uses, so an export
+cannot drift. The DoraHacks variant exists because that platform shows a mermaid
+fence as a plain code block — GitHub renders them, DoraHacks does not.
 
 ## Documents
 

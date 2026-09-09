@@ -9,13 +9,19 @@ import type { SdkClient, SdkLiveFill, SdkMarketRow, SdkOnchainMarket, SdkOrderBo
 /** Collateral and outcome sizes are 6dp on testnet (verified on-chain). */
 export const RAW_DECIMALS = 6;
 /**
- * Gas ceiling for every write. The SDK's 10,000,000 default at a fixed 60 gwei
- * reserves 0.6 STT per transaction; when the balance falls under that the RPC
- * refuses the send and the error surfaces as "Missing or invalid parameters"
- * with the real reason ("insufficient balance") buried in the cause. Measured:
- * a resting order ~327k gas, a crossing order ~2.52M.
+ * Gas ceiling for a write.
+ *
+ * MEASURED, and revised once already. A resting order on a thin book costs
+ * ~327k and a crossing order ~2.52M — so 4,000,000 looked generous. It was not:
+ * on a book with ten resting bid levels, insertion walks them, and a POST_ONLY
+ * bid burned 3,938,601 gas and reverted OUT OF GAS. Book depth, not order size,
+ * drives the cost.
+ *
+ * 8,000,000 sits comfortably above the worst case observed and still below the
+ * SDK's 10,000,000 default. Gas is only RESERVED, not spent: at a fixed 60 gwei
+ * this asks the wallet to hold 0.48 STT free per write.
  */
-export const WRITE_GAS = 4_000_000n;
+export const WRITE_GAS = 8_000_000n;
 const RAW_ONE = 10 ** RAW_DECIMALS;
 
 export type OutcomeSide = 'YES' | 'NO';
@@ -185,7 +191,9 @@ export async function createSdkClient(o: RealSdkClientOptions): Promise<SdkClien
 
     async fetchOrderBook(outcomeSymbol, depth) {
       const { marketId, side } = parseOutcomeSymbol(outcomeSymbol);
-      const book = await ex.client.getBinaryOrderBook(await poolFor(marketId));
+      // Honour the caller's depth: the read truncates by default, and a quote
+      // taken from a truncated book is a quote about the wrong levels.
+      const book = await ex.client.getBinaryOrderBook(await poolFor(marketId), { depth });
       return bookToPort(book as RawBook, side, depth);
     },
 

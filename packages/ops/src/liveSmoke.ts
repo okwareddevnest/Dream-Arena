@@ -11,15 +11,17 @@ import { privateKeyToAccount } from 'viem/accounts';
 /**
  * Gas ceiling for a write.
  *
- * The SDK defaults to 10,000,000 and signs at a fixed 60 gwei, so EVERY
- * transaction reserves 0.6 STT of headroom whether it needs it or not — and when
- * the balance dips under that, the RPC rejects the send and the SDK reports
- * "Missing or invalid parameters", which sounds like a bug in the call. The real
- * message is buried in the cause: "insufficient balance".
- * Measured on-chain: a resting order costs ~327k, a crossing order ~2.52M. Four
- * million is comfortable headroom and reserves ~0.24 STT instead of 0.6.
+ * MEASURED, and revised once already. A resting order on a thin book costs
+ * ~327k and a crossing order ~2.52M — so 4,000,000 looked generous. It was not:
+ * on a book with ten resting bid levels, insertion walks them, and a POST_ONLY
+ * bid burned 3,938,601 gas and reverted OUT OF GAS. Book depth, not order size,
+ * drives the cost.
+ *
+ * 8,000,000 sits comfortably above the worst case observed and still below the
+ * SDK's 10,000,000 default. Gas is only RESERVED, not spent: at a fixed 60 gwei
+ * this asks the wallet to hold 0.48 STT free per write.
  */
-export const WRITE_GAS = 4_000_000n;
+export const WRITE_GAS = 8_000_000n;
 
 export const DEC = 6n;
 export const ONE = 10n ** DEC;
@@ -151,7 +153,11 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
 
     // ── read ──────────────────────────────────────────────────────────────
     const onchain: any = await ex.client.getMarketOnchain(market.marketId);
-    const before: Book = await ex.client.getBinaryOrderBook(pool);
+    // Depth matters: the read truncates (observed: exactly 10 levels), and a
+  // far-from-mid bid lands BELOW that cut. Verifying against a truncated book
+  // reports a resting order as missing.
+  const DEPTH = 60;
+  const before: Book = await ex.client.getBinaryOrderBook(pool, { depth: DEPTH });
     const bookDepth = {
       yesBids: (before.yesBids ?? []).length, yesAsks: (before.yesAsks ?? []).length,
       noBids: (before.noBids ?? []).length, noAsks: (before.noAsks ?? []).length,
@@ -207,7 +213,7 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
     log(`placed tx ${placed.hash} orderId ${orderId} fills ${fills}`);
 
     // ── prove it rests, from the book ─────────────────────────────────────
-    const mid: Book = await ex.client.getBinaryOrderBook(pool);
+    const mid: Book = await ex.client.getBinaryOrderBook(pool, { depth: DEPTH });
     const restingAfterPlace = qtyAt(mid.yesBids, priceRaw);
     if (restingAfterPlace !== restingBefore + qtyRaw) {
       throw new Error(`book missing our size: expected ${restingBefore + qtyRaw}, saw ${restingAfterPlace}`);
@@ -220,7 +226,7 @@ export async function runRoundTrip(opts: RoundTripOptions): Promise<RoundTripRes
     orderId = null;
     log(`cancelled tx ${cancelled.hash}`);
 
-    const after: Book = await ex.client.getBinaryOrderBook(pool);
+    const after: Book = await ex.client.getBinaryOrderBook(pool, { depth: DEPTH });
     const restingAfterCancel = qtyAt(after.yesBids, priceRaw);
     if (restingAfterCancel !== restingBefore) {
       throw new Error(`cancel left size behind: expected ${restingBefore}, saw ${restingAfterCancel}`);
