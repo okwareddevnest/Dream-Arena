@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Dream Arena — agent-first prediction markets on Somnia (Somnia x DreamDEX Event Contracts)",
+  "description": "Dream Arena \u2014 agent-first prediction markets on Somnia (Somnia x DreamDEX Event Contracts)",
   "engines": {
     "node": ">=22"
   },
@@ -12,6 +12,7 @@
     "apps/*"
   ],
   "scripts": {
+    "start": "node --env-file-if-exists=.env --experimental-strip-types packages/ops/src/boot.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",

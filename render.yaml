@@ -1,0 +1,166 @@
+# Dream Arena on Render — ONE service, one port, everything inside it.
+#
+# Why not three services: Render's free tier has no background workers (only web
+# services, static sites and databases), and grants 750 instance-hours per
+# workspace per calendar month. A 30-day month is 720 hours, so exactly one
+# service can stay up around the clock for free. `npm start` therefore boots the
+# site, MIRA and ECHO under one supervisor and fronts them with a proxy on
+# $PORT — see packages/ops/src/boot.ts and docs/80-DEPLOY.md.
+#
+# TESTNET ONLY. Every key below is a Somnia testnet key holding testnet STT.
+services:
+  - type: web
+    name: dream-arena
+    runtime: node
+    plan: free
+    region: oregon
+    # Free services sleep after 15 minutes without inbound traffic — and a
+    # sleeping agent is not trading. Keep the tab open during a demo, or move to
+    # the Starter plan for an always-on run. docs/80-DEPLOY.md §5.
+    buildCommand: npm ci --include=dev && npm run web:build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # ── Runtime ────────────────────────────────────────────────────────────
+      - key: NODE_VERSION
+        value: "24"                     # native TypeScript stripping; no build step for the agents
+      - key: NODE_ENV
+        value: production
+      # Same origin for the site and the API, so the browser talks to itself and
+      # SIWE's domain binding lines up. Read at BUILD time by Next (inlined).
+      - key: NEXT_PUBLIC_API_BASE
+        value: ""
+
+      # ── Mode — RFC-003: LIVE is the demo path, SIM is the test rig ─────────
+      - key: VENUE_MODE
+        value: LIVE
+      - key: BUS_MODE
+        value: inproc
+      - key: SPOT_FEED
+        value: binance
+
+      # ── Somnia testnet (verified live, docs/spikes/S2-sdk.md) ─────────────
+      - key: NETWORK
+        value: testnet
+      - key: SOMNIA_CHAIN_ID
+        value: "50312"
+      - key: SOMNIA_RPC_URL
+        value: https://api.infra.testnet.somnia.network
+      - key: SOMNIA_WS_URL
+        value: wss://api.infra.testnet.somnia.network/ws
+      - key: SOMNIA_INDEXER_URL
+        value: https://dev.smk.somnia.host/v1/graphql
+      - key: SOMNIA_PRICE_FEED_URL
+        value: https://price-feed.dev.oracle.somnia.host/v1/graphql
+      - key: SOMNIA_PRICE_FEED_QUOTE
+        value: USDC
+      - key: SOMNIA_EXPLORER_BASE
+        value: https://shannon-explorer.somnia.network/tx/
+      - key: COLLATERAL_DECIMALS
+        value: "6"
+      # Two venues run simultaneously and the ids move (T-S4). Confirm against a
+      # live row before a demo: `npm run probe:markets`.
+      - key: VENUE_ID
+        value: "0x679795a0195a1b76cdebb7c51d74e058aee92919b8c3389af86ef24535e8a28c"
+
+      # ── Signers — set these in the dashboard, never in this file ───────────
+      # RFC-001 A7: the venue blocks self-matching, so these MUST differ or ECHO
+      # can never make a market for MIRA to take.
+      - key: MIRA_PRIVATE_KEY
+        sync: false
+      - key: ECHO_PRIVATE_KEY
+        sync: false
+      # Guards /api/console/*. Generate one; do not reuse anything.
+      - key: OPERATOR_TOKEN
+        generateValue: true
+
+      # ── Engine (WP §4) ────────────────────────────────────────────────────
+      - key: SETTLEMENT_STYLE_DEFAULT
+        value: EXPIRY
+      - key: EWMV_LAMBDA
+        value: "0.97"
+      - key: EWMV_MIN_OBS
+        value: "20"
+      - key: EWMV_SEED_VOL
+        value: "0.60"
+      - key: EDGE_IN
+        value: "0.06"
+      - key: EDGE_OUT
+        value: "0.02"
+      - key: MIN_EDGE_FLOOR
+        value: "0.015"
+      - key: KELLY_FRACTION
+        value: "0.25"
+
+      # ── Risk guard (FR-X2) ────────────────────────────────────────────────
+      - key: MAX_NET_CONTRACTS_PER_MARKET
+        value: "50"
+      - key: MAX_GROSS_CONTRACTS
+        value: "200"
+      - key: MAX_NOTIONAL_USD
+        value: "250"
+      - key: MAX_SESSION_LOSS_USD
+        value: "100"
+      - key: MAX_ORDERS_PER_MINUTE
+        value: "12"
+      - key: COOLDOWN_MS
+        value: "15000"
+      - key: MAX_QUOTE_AGE_MS
+        value: "4000"
+      - key: KILL_SWITCH
+        value: "false"
+
+      # ── Throttles — MEASURED, do not guess (docs/spikes/S4-limits.md) ─────
+      - key: INDEXER_MAX_IN_FLIGHT
+        value: "1"
+      - key: MARKETS_CACHE_MS
+        value: "15000"
+      - key: QUOTE_CACHE_MS
+        value: "1500"
+      - key: PRICE_FEED_POLL_MS
+        value: "500"
+      - key: RECONCILE_POLL_MS
+        value: "3000"
+      - key: RPC_MAX_IN_FLIGHT
+        value: "4"
+      - key: INDEXER_TIMEOUT_MS
+        value: "12000"
+      - key: INDEXER_RETRIES
+        value: "2"
+      # 5m series roll continuously; a market with seconds left produces orders
+      # that expire inside the write queue.
+      - key: MIN_SECONDS_TO_EXPIRY
+        value: "90"
+
+      # ── ECHO maker (F-A4, WP §5) ──────────────────────────────────────────
+      - key: ECHO_ENABLED
+        value: "true"
+      - key: ECHO_SPREAD
+        value: "0.02"
+      - key: ECHO_QUOTE_SIZE
+        value: "5"
+      - key: ECHO_REFRESH_MS
+        value: "10000"
+      - key: ECHO_MAX_INVENTORY
+        value: "20"
+
+      # ── Hunt rounds (F-A5, WP §6) ─────────────────────────────────────────
+      - key: ROUND_DURATION_MS
+        value: "300000"
+      - key: HUNT_TOP_N
+        value: "5"
+
+      # ── Serving ───────────────────────────────────────────────────────────
+      # WEB_ORIGIN is left unset on purpose: boot.ts falls back to Render's own
+      # RENDER_EXTERNAL_URL, so SIWE binds to the right domain on first deploy
+      # without anyone having to know the subdomain in advance. Set it only when
+      # a custom domain is attached.
+      - key: MIRROR_BALANCE_FRACTION
+        value: "0.05"
+      - key: MIRROR_INTENT_TTL_MS
+        value: "60000"
+      # Render SIGKILLs 30s after SIGTERM; the agents need that window to cancel
+      # resting orders, which are real collateral on a real chain.
+      - key: SHUTDOWN_GRACE_MS
+        value: "25000"

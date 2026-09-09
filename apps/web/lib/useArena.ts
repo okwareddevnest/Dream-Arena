@@ -5,7 +5,20 @@ import { createArenaStore, type ArenaState, type Staleness } from './store';
 import { createArenaClient } from './ws';
 
 const apiBase = () => process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8080';
-const wsUrl = () => apiBase().replace(/^http/, 'ws') + '/ws';
+
+/** The arena feed's socket URL.
+ *
+ *  In development the API is a separate origin on :8080. In deployment
+ *  everything sits behind one port (docs/80-DEPLOY.md), so NEXT_PUBLIC_API_BASE
+ *  is empty and the socket must be resolved against the page instead — which
+ *  also gets the scheme right: a page served over https MUST use wss, and a
+ *  relative `new WebSocket('/ws')` is not reliably supported. */
+export function wsUrl(base = apiBase(), origin?: string): string {
+  const abs = /^https?:\/\//.test(base)
+    ? base
+    : (origin ?? (typeof window === 'undefined' ? 'http://localhost:8080' : window.location.origin)) + base;
+  return abs.replace(/^http/, 'ws') + '/ws';
+}
 
 export function useArena(): { state: ArenaState; staleness: Staleness } {
   const store = useRef(createArenaStore()).current;

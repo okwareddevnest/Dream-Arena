@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const BASE = process.env.RAW_BASE
-  ?? 'https://raw.githubusercontent.com/okwareddevnest/DreamArena/main/';
+  ?? 'https://raw.githubusercontent.com/okwareddevnest/Dream-Arena/main/';
 
 const IMG = [
   ['flowchart TD', 'brand/diagrams/01-decision.png', 'How MIRA decides — four of six outcomes are refusals'],

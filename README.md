@@ -136,7 +136,16 @@ npm run web                  # the site on :3000
 `VENUE_MODE=LIVE` is the default (RFC-003). `Ctrl-C` on either agent cancels its
 resting orders before exiting.
 
-With Docker: `docker compose up --build`.
+One process instead of five — the whole arena behind a single port, which is
+what deployment runs:
+
+```bash
+npm run web:build && npm start    # site + MIRA + ECHO on :10000
+```
+
+With Docker: `docker compose up --build`. Deployed on Render's free tier —
+`render.yaml` is the blueprint, `docs/80-DEPLOY.md` explains why it has to be
+one service.
 
 | route | what it is |
 |---|---|
