@@ -122,8 +122,16 @@ stateDiagram-v2
 
 ## Run it
 
-Both agents need funded testnet wallets. See `docs/70-FUNDING.md`; `npm run fund`
-reports what is missing and pulls tUSDC from the on-chain faucet.
+Both agents need their own funded Somnia testnet wallet — the venue blocks
+self-matching, so one key means the two can never trade with each other.
+`npm run fund` reports what is missing on both and pulls tUSDC from the on-chain
+faucet. STT is gas and cannot be self-served: paste the address into the
+[Google Web3 faucet](https://cloud.google.com/application/web3/faucet/somnia/shannon)
+or [Stakely](https://stakely.io/faucet/somnia-testnet-stt). Each wallet needs
+**0.6 STT** clear, which is one write plus real margin.
+
+Copy `.env.example` if it is present, or take the full variable list from
+`render.yaml` — it carries every non-secret value the agents read.
 
 ```bash
 npm install
@@ -143,9 +151,15 @@ what deployment runs:
 npm run web:build && npm start    # site + MIRA + ECHO on :10000
 ```
 
-With Docker: `docker compose up --build`. Deployed on Render's free tier —
-`render.yaml` is the blueprint, `docs/80-DEPLOY.md` explains why it has to be
-one service.
+With Docker: `docker compose up --build`.
+
+Deployed on Render's free tier from [`render.yaml`](render.yaml), which is
+commented in full. It is **one** service on purpose: Render's free tier has no
+background workers, and grants 750 instance-hours per month against a 720-hour
+month — so exactly one service can stay up around the clock. `packages/ops/src/boot.ts`
+supervises the three processes behind a single proxied port, and each agent
+keeps its own signer, nonce stream and transaction queue. Only the two private
+keys are entered by hand; everything else is in the blueprint.
 
 | route | what it is |
 |---|---|
@@ -201,7 +215,7 @@ packages/venue    Venue interface, SimulatedVenue, DreamDEXVenue, tx queue, reco
 packages/api      WebSocket broadcaster, REST, hunt settlement, MIRROR, calibration
 packages/ops      agent + ECHO entrypoints, arena server, scripts
 apps/web          the site
-docs/             architecture, frozen interfaces, task cards, test plan, runbook
+brand/            logo, cover and architecture diagrams, all generated from code
 state/journal/    one JSONL per run — every decision, replayable
 ```
 
@@ -213,24 +227,42 @@ cover; `brand/diagrams/` holds the three architecture diagrams as PNG.
 ```
 npm run brand       # logo + cover
 npm run diagrams    # the three diagrams as PNG
-npm run dorahacks   # SUBMISSION.md → SUBMISSION-DORAHACKS.md, mermaid swapped for images
+npm run dorahacks   # submission draft → DoraHacks variant, mermaid swapped for images
 ```
 
 All of it renders from the same geometry and palette the app uses, so an export
 cannot drift. The DoraHacks variant exists because that platform shows a mermaid
 fence as a plain code block — GitHub renders them, DoraHacks does not.
 
-## Documents
+## Design record
 
-- `docs/10-ARCHITECTURE.md` — components, dataflow, latency budget
-- `docs/20-INTERFACES.md` — the frozen contracts every lane builds against
-- `docs/40-TESTPLAN.md` — GWT-1..8 and the gate checklists
-- `docs/50-DEMO-RUNBOOK.md` — the demo script
-- `docs/70-FUNDING.md` — testnet funding, verified endpoints
-- `docs/80-DEPLOY.md` — where each process can run, and why the agent cannot be serverless
-- `docs/submission/sdk-feedback.md` — findings for the DEX team, reproduced live
-- `docs/rfc/` — the three amendments made during the build, with reasoning
-- `state/STATE.md` — build ledger and every correction made along the way
+Three assumptions did not survive contact with the live venue, and each was
+amended in writing before any code moved. They are referenced by number
+throughout the source:
+
+- **RFC-001** — what the venue actually enforces. Winnings are *claimed*, not
+  received, so an unclaimed win is invisible until something sweeps it (A5).
+  Self-matching is blocked, so two agents need two funded keys or they can never
+  trade with each other (A7). Reference-mode markets carry no strike until a
+  boundary is posted, so the opening price has to be resolved from the oracle
+  candle or every market skips unpriced (A4).
+- **RFC-002** — the two pricing formulas in the whitepaper disagreed. `F1` was
+  written as `Φ(ln(S/K) / σ√τ)`, but `F2`'s implied-vol inversion solves for
+  `(ln(S/K) − σ²τ/2) / σ√τ` — they invert different functions, so a probability
+  and the vol implied back out of it were never consistent. `F1` became the full
+  `Φ(d₂)`. The `−σ²τ/2` is not a drift assumption, it is Itô's correction, and
+  dropping it is simply wrong.
+- **RFC-003** — **live-first**. The simulator was demoted to a test rig and the
+  demo path is the real chain. Everything the site shows is a transaction you
+  can open on the explorer; `VENUE_MODE=LIVE` is the default because a run that
+  is quietly simulated looks identical on every screen until someone checks.
+
+Interface contracts were frozen before implementation and every lane built
+against them. The full engineering record — product spec, whitepaper, frozen
+interfaces, the RFCs in full, spike reports, the test plan and a build ledger of
+every correction made along the way — is kept privately and is not part of this
+repository. What is here is the system it produced, and the commands above
+check it against the chain rather than against a fixture.
 
 ## Licence
 

@@ -16,9 +16,10 @@ apps/web/.next/
 apps/web/next-env.d.ts
 apps/web/tsconfig.tsbuildinfo
 
-# The orchestrator protocol is the one document that stays private. `*.md` was
-# doing that job, but it also hid docs/, SUBMISSION.md and state/STATE.md —
-# every one of which README links to, so all nine links 404'd for anyone who
-# cloned the repo. Name the private file instead of the whole file type.
+# The engineering record is PRIVATE and stays that way: docs/ (PRD, whitepaper,
+# interfaces, RFCs, spikes, runbook), state/STATE.md, prompt.md, and the
+# submission drafts. README.md is the only public document, so it has to stand
+# on its own — do not add a link from it into anything below.
+docs/
 *.md
 !README.md
